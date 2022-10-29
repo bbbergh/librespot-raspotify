@@ -7,7 +7,7 @@ description = "An open source client library for Spotify, with support for Spoti
 keywords = ["spotify"]
 repository = "https://github.com/librespot-org/librespot"
 readme = "README.md"
-edition = "2018"
+edition = "2021"
 
 [workspace]
 
@@ -56,7 +56,7 @@ getopts = "0.2.21"
 hex = "0.4"
 hyper = "0.14"
 log = "0.4"
-rpassword = "6.0"
+rpassword = "7.1"
 thiserror = "1.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "process"] }
 url = "2.2"
@@ -75,6 +75,12 @@ gstreamer-backend = ["librespot-playback/gstreamer-backend"]
 with-dns-sd = ["librespot-discovery/with-dns-sd"]
 
 default = ["rodio-backend"]
+
+[profile.raspotify]
+inherits = "release"
+panic = "abort"
+codegen-units = 1
+lto = true
 
 [package.metadata.deb]
 maintainer = "librespot-org"
