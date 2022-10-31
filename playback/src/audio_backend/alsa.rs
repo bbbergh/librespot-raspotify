@@ -473,6 +473,28 @@ impl AlsaSink {
 
             pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
 
+            if self.buffer_size != OPTIMAL_BUFFER {
+                trace!("A Buffer Size of {} Frames is Suboptimal", self.buffer_size);
+
+                if self.buffer_size < OPTIMAL_BUFFER {
+                    trace!("A smaller than necessary Buffer Size can lead to underruns (audio glitches) and high CPU usage.");
+                } else {
+                    trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");
+                }
+            }
+
+            let optimal_period = self.buffer_size / OPTIMAL_PERIODS;
+
+            if self.period_size != optimal_period {
+                trace!("A Period Size of {} Frames is Suboptimal", self.period_size);
+
+                if self.period_size < optimal_period {
+                    trace!("A smaller than necessary Period Size relative to Buffer Size can lead to high CPU usage.");
+                } else {
+                    trace!("A larger than necessary Period Size relative to Buffer Size can lessen underrun (audio glitch) protection.");
+                }
+            }
+
             // Let ALSA do the math for us.
             pcm.frames_to_bytes(self.period_size) as usize
         };
