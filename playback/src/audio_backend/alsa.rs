@@ -9,8 +9,8 @@ use alsa::{Direction, ValueOr};
 use std::process::exit;
 use thiserror::Error;
 
-const MAX_BUFFER: Frames = SAMPLE_RATE as Frames;
-const OPTIMAL_BUFFER: Frames = MAX_BUFFER / 2;
+const OPTIMAL_BUFFER: Frames = SAMPLE_RATE as Frames / 2;
+const OPTIMAL_PERIOD: Frames = SAMPLE_RATE as Frames / 10;
 const OPTIMAL_PERIODS: Frames = 5;
 
 #[derive(Debug, Error)]
@@ -249,128 +249,101 @@ impl SinkAsBytes for AlsaSink {
 impl AlsaSink {
     pub const NAME: &'static str = "alsa";
 
-    fn get_buffer_size(hwp: &HwParams) -> Frames {
-        let mut buffer_size = 1;
-
-        let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or(1);
-
-        let max_buffer = hwp
-            .clone()
-            .get_buffer_size_max()
-            .unwrap_or(MAX_BUFFER)
-            .min(MAX_BUFFER);
-
-        let supported_buffer_range = min_buffer..=max_buffer;
-
-        trace!("Supported Buffer Range in Frames: {supported_buffer_range:?}");
-
-        if supported_buffer_range.contains(&OPTIMAL_BUFFER)
-            && hwp
-                .clone()
-                .set_buffer_size_near(OPTIMAL_BUFFER)
-                .unwrap_or(0)
-                == OPTIMAL_BUFFER
-        {
-            buffer_size = OPTIMAL_BUFFER;
-
-            trace!("The Optimal Buffer Size ({OPTIMAL_BUFFER}) is in Range and Supported");
-        } else {
-            let supported_buffer_sizes: Vec<Frames> = supported_buffer_range
-                .into_iter()
-                .filter(|buffer_size| {
-                    hwp.clone().set_buffer_size_near(*buffer_size).unwrap_or(0) == *buffer_size
-                })
-                .collect();
-
-            trace!("Supported Buffer Sizes: {supported_buffer_sizes:#?}");
-
-            let closest_buffer_size = supported_buffer_sizes
-                .iter()
-                .min_by_key(|x| x.abs_diff(OPTIMAL_BUFFER))
-                .unwrap_or(&OPTIMAL_BUFFER);
-
-            trace!("Closest Buffer Size to Optimal ({OPTIMAL_BUFFER}): {closest_buffer_size}");
-
-            if hwp
-                .clone()
-                .set_buffer_size_near(*closest_buffer_size)
-                .unwrap_or(0)
-                == *closest_buffer_size
-            {
-                buffer_size = *closest_buffer_size;
-
-                trace!("Buffer Size in Frames: {buffer_size}");
-            } else {
-                trace!("Error setting Buffer Size, falling back to the device's defaults");
-            }
-        }
-
-        buffer_size
-    }
-
-    fn get_period_size(hwp: &HwParams, buffer_size: Frames) -> Frames {
-        let optimal_period_size = buffer_size / OPTIMAL_PERIODS;
-        // There must always be at least 2 periods per buffer.
-        let max_period_size = buffer_size / 2;
-        let mut period_size = 1;
-
-        let min_period = hwp.clone().get_period_size_min().unwrap_or(1);
+    fn get_period_size(hwp: &HwParams) -> Frames {
+        let min_period = hwp.clone().get_period_size_min().unwrap_or(0);
 
         let max_period = hwp
             .clone()
             .get_period_size_max()
-            .unwrap_or(max_period_size)
-            .min(max_period_size);
+            .unwrap_or(0)
+            .min(OPTIMAL_PERIOD);
 
-        let supported_period_range = min_period..=max_period;
+        if min_period >= max_period {
+            trace!("Error getting Period Size, falling back to the device's defaults");
 
-        trace!("Supported Period Range in Frames: {supported_period_range:?}");
-
-        if supported_period_range.contains(&optimal_period_size)
-            && hwp
-                .clone()
-                .set_period_size_near(optimal_period_size, ValueOr::Nearest)
-                .unwrap_or(0)
-                == optimal_period_size
-        {
-            period_size = optimal_period_size;
-
-            trace!("The Optimal Period Size ({optimal_period_size}) is in Range and Supported");
+            0
         } else {
-            let supported_period_sizes: Vec<Frames> = supported_period_range
-                .into_iter()
-                .filter(|period_size| {
-                    hwp.clone()
-                        .set_period_size_near(*period_size, ValueOr::Nearest)
-                        .unwrap_or(0)
-                        == *period_size
-                })
-                .collect();
+            let supported_period_range = min_period..=max_period;
 
-            trace!("Supported Period Sizes: {supported_period_sizes:#?}");
+            trace!("Supported Period Range in Frames: {supported_period_range:?}");
 
-            let closest_period_size = supported_period_sizes
-                .iter()
-                .min_by_key(|x| x.abs_diff(optimal_period_size))
-                .unwrap_or(&optimal_period_size);
-
-            trace!("Closest Period Size to Optimal ({optimal_period_size}): {closest_period_size}");
-
-            if hwp
-                .clone()
-                .set_period_size_near(*closest_period_size, ValueOr::Nearest)
-                .unwrap_or(0)
-                == *closest_period_size
+            if supported_period_range.contains(&OPTIMAL_PERIOD)
+                && hwp
+                    .clone()
+                    .set_period_size_near(OPTIMAL_PERIOD, ValueOr::Nearest)
+                    .unwrap_or(0)
+                    == OPTIMAL_PERIOD
             {
-                period_size = *closest_period_size;
+                trace!("The Optimal Period Size ({OPTIMAL_PERIOD}) is in Range and Supported");
 
-                trace!("Period Size in Frames: {period_size}");
+                OPTIMAL_PERIOD
             } else {
-                trace!("Error setting Period Size, falling back to the device's defaults");
+                let closest_period_size = supported_period_range
+                    .into_iter()
+                    .filter(|p| {
+                        hwp.clone()
+                            .set_period_size_near(*p, ValueOr::Nearest)
+                            .unwrap_or(0)
+                            == *p
+                    })
+                    .min_by_key(|p: &Frames| p.abs_diff(OPTIMAL_PERIOD))
+                    .unwrap_or_default();
+
+                if closest_period_size > 0 {
+                    trace!("Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD}): {closest_period_size}");
+                } else {
+                    trace!("Error getting Period Size, falling back to the device's defaults");
+                }
+
+                closest_period_size
             }
         }
+    }
 
-        period_size
+    fn get_buffer_size(hwp: &HwParams, period_size: Frames) -> Frames {
+        let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or(0);
+
+        let max_buffer = hwp
+            .clone()
+            .get_buffer_size_max()
+            .unwrap_or(0)
+            .min(period_size * 10);
+
+        if min_buffer >= max_buffer {
+            trace!("Error getting Buffer Size, falling back to the device's defaults");
+
+            0
+        } else {
+            let supported_buffer_range = min_buffer..=max_buffer;
+
+            trace!("Supported Buffer Range in Frames: {supported_buffer_range:?}");
+
+            if supported_buffer_range.contains(&OPTIMAL_BUFFER)
+                && hwp
+                    .clone()
+                    .set_buffer_size_near(OPTIMAL_BUFFER)
+                    .unwrap_or(0)
+                    == OPTIMAL_BUFFER
+            {
+                trace!("The Optimal Buffer Size ({OPTIMAL_BUFFER}) is in Range and Supported");
+
+                OPTIMAL_BUFFER
+            } else {
+                let closest_buffer_size = supported_buffer_range
+                    .into_iter()
+                    .filter(|b| hwp.clone().set_buffer_size_near(*b).unwrap_or(0) == *b)
+                    .min_by_key(|b: &Frames| b.abs_diff(OPTIMAL_BUFFER))
+                    .unwrap_or_default();
+
+                if closest_buffer_size > 0 {
+                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {closest_buffer_size}");
+                } else {
+                    trace!("Error getting Buffer Size, falling back to the device's defaults");
+                }
+
+                closest_buffer_size
+            }
+        }
     }
 
     fn open_device(&mut self) -> SinkResult<()> {
@@ -442,25 +415,25 @@ impl AlsaSink {
                 // hwp continuity is very important.
                 let hwp_clone = hwp.clone();
 
-                let buffer_size = Self::get_buffer_size(&hwp_clone);
+                let period_size = Self::get_period_size(&hwp_clone);
 
-                let mut period_size = 1;
+                let mut buffer_size = 0;
 
-                if buffer_size > 1 {
+                if period_size > 0 {
                     hwp_clone
-                        .set_buffer_size_near(buffer_size)
+                        .set_period_size_near(period_size, ValueOr::Nearest)
                         .map_err(AlsaError::HwParams)?;
 
-                    period_size = Self::get_period_size(&hwp_clone, buffer_size);
+                    buffer_size = Self::get_buffer_size(&hwp_clone, period_size);
 
-                    if period_size > 1 {
+                    if buffer_size > 0 {
                         hwp_clone
-                            .set_period_size_near(period_size, ValueOr::Nearest)
+                            .set_buffer_size_near(buffer_size)
                             .map_err(AlsaError::HwParams)?;
                     }
                 }
 
-                if buffer_size > 1 && period_size > 1 {
+                if buffer_size > 0 && period_size > 0 {
                     pcm.hw_params(&hwp_clone).map_err(AlsaError::Pcm)?;
                 } else {
                     pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
