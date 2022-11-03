@@ -1,6 +1,6 @@
 [package]
 name = "librespot"
-version = "0.4.2"
+version = "0.4.2-raspotify-fork"
 authors = ["Librespot Org"]
 license = "MIT"
 description = "An open source client library for Spotify, with support for Spotify Connect"

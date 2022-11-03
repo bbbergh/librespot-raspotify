@@ -13,27 +13,44 @@ const OPTIMAL_BUFFER: Frames = SAMPLE_RATE as Frames / 2;
 const OPTIMAL_PERIOD: Frames = SAMPLE_RATE as Frames / 10;
 const OPTIMAL_PERIODS: Frames = 5;
 
+const COMMON_SAMPLE_RATES: [u32; 14] = [
+    8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600,
+    768000,
+];
+
+const FORMATS: [AudioFormat; 6] = [
+    AudioFormat::S16,
+    AudioFormat::S24,
+    AudioFormat::S24_3,
+    AudioFormat::S32,
+    AudioFormat::F32,
+    AudioFormat::F64,
+];
+
 #[derive(Debug, Error)]
 enum AlsaError {
-    #[error("<AlsaSink> Device {device} Unsupported Format {alsa_format} ({format:?}), {e}")]
+    #[error("<AlsaSink> Device {device} Unsupported Format {alsa_format} ({format:?}), {e}, Supported Format(s): {supported_formats:?}")]
     UnsupportedFormat {
         device: String,
         alsa_format: Format,
         format: AudioFormat,
+        supported_formats: Vec<String>,
         e: alsa::Error,
     },
 
-    #[error("<AlsaSink> Device {device} Unsupported Channel Count {channel_count}, {e}")]
+    #[error("<AlsaSink> Device {device} Unsupported Channel Count {channel_count}, {e}, Supported Channel Count(s): {supported_channel_counts:?}")]
     UnsupportedChannelCount {
         device: String,
         channel_count: u8,
+        supported_channel_counts: Vec<u32>,
         e: alsa::Error,
     },
 
-    #[error("<AlsaSink> Device {device} Unsupported Sample Rate {samplerate}, {e}")]
+    #[error("<AlsaSink> Device {device} Unsupported Sample Rate {samplerate}, {e}, Supported Sample Rate(s): {supported_rates:?}")]
     UnsupportedSampleRate {
         device: String,
         samplerate: u32,
+        supported_rates: Vec<u32>,
         e: alsa::Error,
     },
 
@@ -110,49 +127,49 @@ fn list_compatible_devices() -> SinkResult<()> {
     for a in i {
         if let Some(Direction::Playback) = a.direction {
             if let Some(name) = a.name {
-                if let Ok(pcm) = PCM::new(&name, Direction::Playback, false) {
-                    if let Ok(hwp) = HwParams::any(&pcm) {
-                        // Only show devices that support
-                        // 2 ch 44.1 Interleaved.
+                // surround* outputs throw:
+                // ALSA lib pcm_route.c:877:(find_matching_chmap) Found no matching channel map
+                if name.contains(':') && !name.starts_with("surround") {
+                    if let Ok(pcm) = PCM::new(&name, Direction::Playback, false) {
+                        if let Ok(hwp) = HwParams::any(&pcm) {
+                            // Only show devices that support
+                            // 2 ch 44.1 Interleaved.
 
-                        if hwp.set_access(Access::RWInterleaved).is_ok()
-                            && hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).is_ok()
-                            && hwp.set_channels(NUM_CHANNELS as u32).is_ok()
-                        {
-                            let mut supported_formats = vec![];
+                            if hwp.set_access(Access::RWInterleaved).is_ok()
+                                && hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).is_ok()
+                                && hwp.set_channels(NUM_CHANNELS as u32).is_ok()
+                            {
+                                let supported_formats: Vec<String> = FORMATS
+                                    .iter()
+                                    .filter_map(|f| {
+                                        if hwp.test_format(Format::from(*f)).is_ok() {
+                                            Some(format!("{f:?}"))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
 
-                            for f in &[
-                                AudioFormat::S16,
-                                AudioFormat::S24,
-                                AudioFormat::S24_3,
-                                AudioFormat::S32,
-                                AudioFormat::F32,
-                                AudioFormat::F64,
-                            ] {
-                                if hwp.test_format(Format::from(*f)).is_ok() {
-                                    supported_formats.push(format!("{f:?}"));
+                                if !supported_formats.is_empty() {
+                                    println!("\tDevice:\n\n\t\t{name}\n");
+
+                                    println!(
+                                        "\tDescription:\n\n\t\t{}\n",
+                                        a.desc.unwrap_or_default().replace('\n', "\n\t\t")
+                                    );
+
+                                    println!(
+                                        "\tSupported Format(s):\n\n\t\t{}\n",
+                                        supported_formats.join(" ")
+                                    );
+
+                                    println!(
+                                        "\t------------------------------------------------------\n"
+                                    );
                                 }
                             }
-
-                            if !supported_formats.is_empty() {
-                                println!("\tDevice:\n\n\t\t{name}\n");
-
-                                println!(
-                                    "\tDescription:\n\n\t\t{}\n",
-                                    a.desc.unwrap_or_default().replace('\n', "\n\t\t")
-                                );
-
-                                println!(
-                                    "\tSupported Format(s):\n\n\t\t{}\n",
-                                    supported_formats.join(" ")
-                                );
-
-                                println!(
-                                    "\t------------------------------------------------------\n"
-                                );
-                            }
-                        }
-                    };
+                        };
+                    }
                 }
             }
         }
@@ -286,7 +303,7 @@ impl AlsaSink {
                             .unwrap_or(0)
                             == *p
                     })
-                    .min_by_key(|p: &Frames| p.abs_diff(OPTIMAL_PERIOD))
+                    .min_by_key(|p| p.abs_diff(OPTIMAL_PERIOD))
                     .unwrap_or_default();
 
                 if closest_period_size > 0 {
@@ -307,7 +324,7 @@ impl AlsaSink {
             .clone()
             .get_buffer_size_max()
             .unwrap_or(0)
-            .min(period_size * 10);
+            .min(period_size * OPTIMAL_PERIODS * 2);
 
         if min_buffer >= max_buffer {
             trace!("Error getting Buffer Size, falling back to the device's defaults");
@@ -332,7 +349,7 @@ impl AlsaSink {
                 let closest_buffer_size = supported_buffer_range
                     .into_iter()
                     .filter(|b| hwp.clone().set_buffer_size_near(*b).unwrap_or(0) == *b)
-                    .min_by_key(|b: &Frames| b.abs_diff(OPTIMAL_BUFFER))
+                    .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
                     .unwrap_or_default();
 
                 if closest_buffer_size > 0 {
@@ -366,26 +383,52 @@ impl AlsaSink {
 
             let alsa_format = Format::from(self.format);
 
-            hwp.set_format(alsa_format)
-                .map_err(|e| AlsaError::UnsupportedFormat {
+            hwp.set_format(alsa_format).map_err(|e| {
+                let supported_formats: Vec<String> = FORMATS
+                    .iter()
+                    .filter_map(|f| {
+                        if hwp.test_format(Format::from(*f)).is_ok() {
+                            Some(format!("{f:?}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                AlsaError::UnsupportedFormat {
                     device: self.device.clone(),
                     alsa_format,
                     format: self.format,
+                    supported_formats,
                     e,
-                })?;
+                }
+            })?;
 
             hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).map_err(|e| {
+                let supported_rates: Vec<u32> = (hwp.get_rate_min().unwrap_or_default()
+                    ..=hwp.get_rate_max().unwrap_or_default())
+                    .filter(|r| COMMON_SAMPLE_RATES.contains(r) && hwp.test_rate(*r).is_ok())
+                    .collect();
+
                 AlsaError::UnsupportedSampleRate {
                     device: self.device.clone(),
                     samplerate: SAMPLE_RATE,
+                    supported_rates,
                     e,
                 }
             })?;
 
             hwp.set_channels(NUM_CHANNELS as u32).map_err(|e| {
+                let supported_channel_counts: Vec<u32> =
+                    (hwp.get_channels_min().unwrap_or_default()
+                        ..=hwp.get_channels_max().unwrap_or_default())
+                        .filter(|c| hwp.test_channels(*c).is_ok())
+                        .collect();
+
                 AlsaError::UnsupportedChannelCount {
                     device: self.device.clone(),
                     channel_count: NUM_CHANNELS,
+                    supported_channel_counts,
                     e,
                 }
             })?;
