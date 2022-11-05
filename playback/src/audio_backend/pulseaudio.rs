@@ -3,7 +3,7 @@ use crate::config::AudioFormat;
 use crate::convert::Converter;
 use crate::decoder::AudioPacket;
 use crate::{NUM_CHANNELS, SAMPLE_RATE};
-use libpulse_binding::{self as pulse, error::PAErr, stream::Direction};
+use libpulse_binding::{self as pulse, def::BufferAttr, error::PAErr, stream::Direction};
 use libpulse_simple_binding::Simple;
 use std::env;
 use thiserror::Error;
@@ -50,6 +50,9 @@ pub struct PulseAudioSink {
     app_name: String,
     stream_desc: String,
     format: AudioFormat,
+    sample_spec: pulse::sample::Spec,
+    buffer_attr: BufferAttr,
+    buffer: Vec<u8>,
 }
 
 impl Open for PulseAudioSink {
@@ -64,7 +67,39 @@ impl Open for PulseAudioSink {
             actual_format = AudioFormat::F32;
         }
 
-        info!("Using PulseAudioSink with format: {:?}", actual_format);
+        info!("Using PulseAudioSink with format: {actual_format:?}");
+
+        let pulse_format = match actual_format {
+            AudioFormat::F32 => pulse::sample::Format::FLOAT32NE,
+            AudioFormat::S32 => pulse::sample::Format::S32NE,
+            AudioFormat::S24 => pulse::sample::Format::S24_32NE,
+            AudioFormat::S24_3 => pulse::sample::Format::S24NE,
+            AudioFormat::S16 => pulse::sample::Format::S16NE,
+            _ => unreachable!(),
+        };
+
+        let sample_spec = pulse::sample::Spec {
+            format: pulse_format,
+            channels: NUM_CHANNELS,
+            rate: SAMPLE_RATE,
+        };
+
+        // 1000ms / 1 sec
+        let maxlength = SAMPLE_RATE * NUM_CHANNELS as u32 * actual_format.size() as u32;
+        // 100ms
+        let tlength = maxlength / 10;
+        // 500ms
+        let prebuf = tlength / 2;
+
+        let buffer_attr = BufferAttr {
+            maxlength,
+            tlength,
+            prebuf,
+            minreq: u32::MAX,
+            fragsize: u32::MAX,
+        };
+
+        let buffer = Vec::with_capacity(tlength as usize);
 
         Self {
             sink: None,
@@ -72,6 +107,9 @@ impl Open for PulseAudioSink {
             app_name,
             stream_desc,
             format: actual_format,
+            sample_spec,
+            buffer_attr,
+            buffer,
         }
     }
 }
@@ -79,25 +117,9 @@ impl Open for PulseAudioSink {
 impl Sink for PulseAudioSink {
     fn start(&mut self) -> SinkResult<()> {
         if self.sink.is_none() {
-            // PulseAudio calls S24 and S24_3 different from the rest of the world
-            let pulse_format = match self.format {
-                AudioFormat::F32 => pulse::sample::Format::FLOAT32NE,
-                AudioFormat::S32 => pulse::sample::Format::S32NE,
-                AudioFormat::S24 => pulse::sample::Format::S24_32NE,
-                AudioFormat::S24_3 => pulse::sample::Format::S24NE,
-                AudioFormat::S16 => pulse::sample::Format::S16NE,
-                _ => unreachable!(),
-            };
-
-            let sample_spec = pulse::sample::Spec {
-                format: pulse_format,
-                channels: NUM_CHANNELS,
-                rate: SAMPLE_RATE,
-            };
-
-            if !sample_spec.is_valid() {
+            if !self.sample_spec.is_valid() {
                 let pulse_error = PulseError::InvalidSampleSpec {
-                    pulse_format,
+                    pulse_format: self.sample_spec.format,
                     format: self.format,
                     channels: NUM_CHANNELS,
                     rate: SAMPLE_RATE,
@@ -107,14 +129,14 @@ impl Sink for PulseAudioSink {
             }
 
             let sink = Simple::new(
-                None,                   // Use the default server.
-                &self.app_name,         // Our application's name.
-                Direction::Playback,    // Direction.
-                self.device.as_deref(), // Our device (sink) name.
-                &self.stream_desc,      // Description of our stream.
-                &sample_spec,           // Our sample format.
-                None,                   // Use default channel map.
-                None,                   // Use default buffering attributes.
+                None,                    // Use the default server.
+                &self.app_name,          // Our application's name.
+                Direction::Playback,     // Direction.
+                self.device.as_deref(),  // Our device (sink) name.
+                &self.stream_desc,       // Description of our stream.
+                &self.sample_spec,       // Our sample format.
+                None,                    // Use default channel map.
+                Some(&self.buffer_attr), // Use our buffering attributes.
             )
             .map_err(PulseError::ConnectionRefused)?;
 
@@ -125,9 +147,17 @@ impl Sink for PulseAudioSink {
     }
 
     fn stop(&mut self) -> SinkResult<()> {
-        let sink = self.sink.take().ok_or(PulseError::NotConnected)?;
+        if self.sink.is_some() {
+            // Zero fill the remainder of the buffer and
+            // write any leftover data before draining the actual PulseAudio buffer.
+            self.buffer.resize(self.buffer.capacity(), 0);
+            self.write_buf()?;
 
-        sink.drain().map_err(PulseError::DrainFailure)?;
+            let sink = self.sink.take().ok_or(PulseError::NotConnected)?;
+
+            sink.drain().map_err(PulseError::DrainFailure)?;
+        }
+
         Ok(())
     }
 
@@ -136,14 +166,43 @@ impl Sink for PulseAudioSink {
 
 impl SinkAsBytes for PulseAudioSink {
     fn write_bytes(&mut self, data: &[u8]) -> SinkResult<()> {
-        let sink = self.sink.as_mut().ok_or(PulseError::NotConnected)?;
+        let mut start_index = 0;
+        let data_len = data.len();
+        let capacity = self.buffer.capacity();
 
-        sink.write(data).map_err(PulseError::OnWrite)?;
+        loop {
+            let data_left = data_len - start_index;
+            let space_left = capacity - self.buffer.len();
+            let data_to_buffer = data_left.min(space_left);
+            let end_index = start_index + data_to_buffer;
 
-        Ok(())
+            self.buffer.extend_from_slice(&data[start_index..end_index]);
+
+            if self.buffer.len() == capacity {
+                self.write_buf()?;
+            }
+
+            if end_index == data_len {
+                break Ok(());
+            }
+
+            start_index = end_index;
+        }
     }
 }
 
 impl PulseAudioSink {
     pub const NAME: &'static str = "pulseaudio";
+
+    fn write_buf(&mut self) -> SinkResult<()> {
+        if self.sink.is_some() {
+            let sink = self.sink.as_mut().ok_or(PulseError::NotConnected)?;
+
+            sink.write(&self.buffer).map_err(PulseError::OnWrite)?;
+        }
+
+        self.buffer.clear();
+
+        Ok(())
+    }
 }
