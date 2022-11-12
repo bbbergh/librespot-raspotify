@@ -357,6 +357,22 @@ impl AlsaSink {
         }
     }
 
+    fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
+        let period_size = Self::get_period_size(hwp);
+
+        if period_size > 0
+            && hwp
+                .set_period_size_near(period_size, ValueOr::Nearest)
+                .is_ok()
+        {
+            let buffer_size = Self::get_buffer_size(hwp, period_size);
+
+            return buffer_size > 0 && hwp.set_buffer_size_near(buffer_size).is_ok();
+        }
+
+        false
+    }
+
     fn open_device(&mut self) -> SinkResult<()> {
         let pcm = PCM::new(&self.device, Direction::Playback, false).map_err(|e| {
             AlsaError::PcmSetUp {
@@ -452,25 +468,7 @@ impl AlsaSink {
                 // hwp continuity is very important.
                 let hwp_clone = hwp.clone();
 
-                let period_size = Self::get_period_size(&hwp_clone);
-
-                let mut buffer_size = 0;
-
-                if period_size > 0 {
-                    hwp_clone
-                        .set_period_size_near(period_size, ValueOr::Nearest)
-                        .map_err(AlsaError::HwParams)?;
-
-                    buffer_size = Self::get_buffer_size(&hwp_clone, period_size);
-
-                    if buffer_size > 0 {
-                        hwp_clone
-                            .set_buffer_size_near(buffer_size)
-                            .map_err(AlsaError::HwParams)?;
-                    }
-                }
-
-                if buffer_size > 0 && period_size > 0 {
+                if Self::set_period_and_buffer_size(&hwp_clone) {
                     pcm.hw_params(&hwp_clone).map_err(AlsaError::Pcm)?;
                 } else {
                     pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
