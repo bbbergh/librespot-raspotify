@@ -77,9 +77,6 @@ enum AlsaError {
 
     #[error("<AlsaSink> Could Not Parse Output Name(s) and/or Description(s), {0}")]
     Parsing(alsa::Error),
-
-    #[error("<AlsaSink>")]
-    NotConnected,
 }
 
 impl From<AlsaError> for SinkError {
@@ -89,7 +86,6 @@ impl From<AlsaError> for SinkError {
         match e {
             DrainFailure(_) | OnWrite(_) => SinkError::OnWrite(es),
             PcmSetUp { .. } => SinkError::ConnectionRefused(es),
-            NotConnected => SinkError::NotConnected(es),
             _ => SinkError::InvalidParams(es),
         }
     }
@@ -218,14 +214,12 @@ impl Sink for AlsaSink {
     }
 
     fn stop(&mut self) -> SinkResult<()> {
-        if self.pcm.is_some() {
-            // Zero fill the remainder of the period buffer and
-            // write any leftover data before draining the actual PCM buffer.
-            self.period_buffer.resize(self.period_buffer.capacity(), 0);
-            self.write_buf()?;
+        // Zero fill the remainder of the period buffer and
+        // write any leftover data before draining the actual PCM buffer.
+        self.period_buffer.resize(self.period_buffer.capacity(), 0);
+        self.write_buf()?;
 
-            let pcm = self.pcm.take().ok_or(AlsaError::NotConnected)?;
-
+        if let Some(pcm) = self.pcm.take() {
             pcm.drain().map_err(AlsaError::DrainFailure)?;
         }
 
@@ -533,9 +527,7 @@ impl AlsaSink {
     }
 
     fn write_buf(&mut self) -> SinkResult<()> {
-        if self.pcm.is_some() {
-            let pcm = self.pcm.as_mut().ok_or(AlsaError::NotConnected)?;
-
+        if let Some(pcm) = self.pcm.as_mut() {
             if let Err(e) = pcm.io_bytes().writei(&self.period_buffer) {
                 // Capture and log the original error as a warning, and then try to recover.
                 // If recovery fails then forward that error back to player.
