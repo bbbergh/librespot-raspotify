@@ -181,6 +181,7 @@ struct Setup {
     zeroconf_port: u16,
     player_event_program: Option<String>,
     emit_sink_events: bool,
+    zeroconf_ip: Vec<std::net::IpAddr>,
 }
 
 fn get_setup() -> Setup {
@@ -234,6 +235,7 @@ fn get_setup() -> Setup {
     const VOLUME_CTRL: &str = "volume-ctrl";
     const VOLUME_RANGE: &str = "volume-range";
     const ZEROCONF_PORT: &str = "zeroconf-port";
+    const ZEROCONF_INTERFACE: &str = "zeroconf-interface";
 
     // Mostly arbitrary.
     const AUTOPLAY_SHORT: &str = "A";
@@ -252,6 +254,7 @@ fn get_setup() -> Setup {
     const DISABLE_GAPLESS_SHORT: &str = "g";
     const DISABLE_CREDENTIAL_CACHE_SHORT: &str = "H";
     const HELP_SHORT: &str = "h";
+    const ZEROCONF_INTERFACE_SHORT: &str = "i";
     const CACHE_SIZE_LIMIT_SHORT: &str = "M";
     const MIXER_TYPE_SHORT: &str = "m";
     const ENABLE_VOLUME_NORMALISATION_SHORT: &str = "N";
@@ -560,6 +563,12 @@ fn get_setup() -> Setup {
         AP_PORT,
         "Connect to an AP with a specified port 1 - 65535. If no AP with that port is present a fallback AP will be used. Available ports are usually 80, 443 and 4070.",
         "PORT",
+    )
+    .optopt(
+        ZEROCONF_INTERFACE_SHORT,
+        ZEROCONF_INTERFACE,
+        "Comma-separated interface IP addresses on which zeroconf will bind. Defaults to all interfaces. Ignored by DNS-SD.",
+        "IP"
     );
 
     let args: Vec<_> = std::env::args_os()
@@ -1122,6 +1131,31 @@ fn get_setup() -> Setup {
         0
     };
 
+    let zeroconf_ip: Vec<std::net::IpAddr> = if opt_present(ZEROCONF_INTERFACE) {
+        if let Some(zeroconf_ip) = opt_str(ZEROCONF_INTERFACE) {
+            zeroconf_ip
+                .split(',')
+                .map(|s| {
+                    s.trim().parse::<std::net::IpAddr>().unwrap_or_else(|_| {
+                        invalid_error_msg(
+                            ZEROCONF_INTERFACE,
+                            ZEROCONF_INTERFACE_SHORT,
+                            s,
+                            "IPv4 and IPv6 addresses",
+                            "",
+                        );
+                        exit(1);
+                    })
+                })
+                .collect()
+        } else {
+            warn!("Unable to use zeroconf-interface option, default to all interfaces.");
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
     let connect_config = {
         let connect_default_config = ConnectConfig::default();
 
@@ -1564,6 +1598,7 @@ fn get_setup() -> Setup {
         zeroconf_port,
         player_event_program,
         emit_sink_events,
+        zeroconf_ip,
     }
 }
 
@@ -1593,6 +1628,7 @@ async fn main() {
             .name(setup.connect_config.name.clone())
             .device_type(setup.connect_config.device_type)
             .port(setup.zeroconf_port)
+            .zeroconf_ip(setup.zeroconf_ip)
             .launch()
         {
             Ok(d) => discovery = Some(d),
