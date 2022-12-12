@@ -1623,17 +1623,42 @@ async fn main() {
     let mut connecting: Pin<Box<dyn future::FusedFuture<Output = _>>> = Box::pin(future::pending());
 
     if setup.enable_discovery {
-        let device_id = setup.session_config.device_id.clone();
-        match librespot::discovery::Discovery::builder(device_id)
-            .name(setup.connect_config.name.clone())
-            .device_type(setup.connect_config.device_type)
-            .port(setup.zeroconf_port)
-            .zeroconf_ip(setup.zeroconf_ip)
-            .launch()
-        {
-            Ok(d) => discovery = Some(d),
-            Err(err) => warn!("Could not initialise discovery: {}.", err),
-        };
+        // When started at boot as a service
+        // discovery may fail due to it trying
+        // to bind to interfaces before the network
+        // is actually up.
+        // This could be prevented in systemd
+        // by starting the service after network-online.target
+        // but it requires that a wait-online.service is also enabled
+        // which is not always the case since a wait-online.service can
+        // potentially hang the boot process until it times out in certain situations.
+        // This allows for discovery to retry initially every 10 sec for up to 60 secs
+        // before giving up thus papering over the issue and not holding up the boot process.
+        let mut fail_count = 0;
+        loop {
+            let device_id = setup.session_config.device_id.clone();
+            match librespot::discovery::Discovery::builder(device_id)
+                .name(setup.connect_config.name.clone())
+                .device_type(setup.connect_config.device_type)
+                .port(setup.zeroconf_port)
+                .zeroconf_ip(setup.zeroconf_ip.clone())
+                .launch()
+            {
+                Ok(d) => {
+                    discovery = Some(d);
+                    break;
+                }
+                Err(err) => {
+                    fail_count += 1;
+                    if fail_count < 6 {
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    } else {
+                        warn!("Could not initialise discovery: {}.", err);
+                        break;
+                    }
+                }
+            };
+        }
     }
 
     if let Some(credentials) = setup.credentials {
