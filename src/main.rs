@@ -1635,6 +1635,8 @@ async fn main() {
         // This allows for discovery to retry initially every 10 sec for up to 60 secs
         // before giving up thus papering over the issue and not holding up the boot process.
         let mut fail_count = 0;
+        let falure_limit = 6;
+        let retry_timeout = Duration::from_secs(10);
         loop {
             let device_id = setup.session_config.device_id.clone();
             match librespot::discovery::Discovery::builder(device_id)
@@ -1650,8 +1652,8 @@ async fn main() {
                 }
                 Err(err) => {
                     fail_count += 1;
-                    if fail_count < 6 {
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    if fail_count < falure_limit {
+                        tokio::time::sleep(retry_timeout).await;
                     } else {
                         warn!("Could not initialise discovery: {}.", err);
                         break;
