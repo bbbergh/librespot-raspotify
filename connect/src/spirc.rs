@@ -232,7 +232,7 @@ impl Spirc {
 
         // Uri updated in response to issue #288
         debug!("canonical_username: {}", &session.username());
-        let uri = format!("hm://remote/user/{}/", url_encode(&session.username()));
+        let uri = format!("hm://remote/user/{}/", url_encode(session.username()));
 
         let subscription = Box::pin(
             session
@@ -749,7 +749,7 @@ impl SpircTask {
                 self.state.set_status(PlayStatus::kPlayStatusPlay);
                 self.update_state_position(position_ms);
                 self.play_status = SpircPlayStatus::Playing {
-                    nominal_start_time: self.now_ms() as i64 - position_ms as i64,
+                    nominal_start_time: self.now_ms() - position_ms as i64,
                     preloading_of_next_track_triggered,
                 };
             }
@@ -897,7 +897,7 @@ impl SpircTask {
         if (context_uri.starts_with("spotify:station:")
             || context_uri.starts_with("spotify:dailymix:")
             // spotify:user:xxx:collection
-            || context_uri.starts_with(&format!("spotify:user:{}:collection",url_encode(&self.session.username()))))
+            || context_uri.starts_with(&format!("spotify:user:{}:collection",url_encode(self.session.username()))))
             && ((self.state.get_track().len() as u32) - new_index) < CONTEXT_FETCH_THRESHOLD
         {
             self.context_fut = self.resolve_station(&context_uri);

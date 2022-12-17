@@ -155,5 +155,5 @@ where
     D: serde::Deserializer<'de>,
 {
     let v: String = serde::Deserialize::deserialize(de)?;
-    base64::decode(&v).map_err(|e| serde::de::Error::custom(e.to_string()))
+    base64::decode(v).map_err(|e| serde::de::Error::custom(e.to_string()))
 }

@@ -1094,7 +1094,7 @@ impl Future for PlayerInternal {
                                                 self.send_event(PlayerEvent::Playing {
                                                     track_id,
                                                     play_request_id,
-                                                    position_ms: stream_position_millis as u32,
+                                                    position_ms: stream_position_millis,
                                                     duration_ms,
                                                 });
                                             }

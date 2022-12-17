@@ -50,7 +50,7 @@ impl RequestHandler {
     }
 
     fn handle_get_info(&self) -> Response<hyper::Body> {
-        let public_key = base64::encode(&self.keys.public_key());
+        let public_key = base64::encode(self.keys.public_key());
         let device_type: &str = self.config.device_type.into();
 
         let body = json!({
@@ -132,7 +132,7 @@ impl RequestHandler {
             data
         };
 
-        let credentials = Credentials::with_blob(username, &decrypted, &self.config.device_id);
+        let credentials = Credentials::with_blob(username, decrypted, &self.config.device_id);
 
         self.tx.send(credentials).unwrap();
 
