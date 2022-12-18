@@ -1623,21 +1623,19 @@ async fn main() {
     let mut connecting: Pin<Box<dyn future::FusedFuture<Output = _>>> = Box::pin(future::pending());
 
     if setup.enable_discovery {
-        // When started at boot as a service
-        // discovery may fail due to it trying
-        // to bind to interfaces before the network
-        // is actually up.
-        // This could be prevented in systemd
-        // by starting the service after network-online.target
-        // but it requires that a wait-online.service is also enabled
-        // which is not always the case since a wait-online.service can
-        // potentially hang the boot process until it times out in certain situations.
-        // This allows for discovery to retry initially every 10 sec for up to 60 secs
+        // When started at boot as a service discovery may fail due to it
+        // trying to bind to interfaces before the network is actually up.
+        // This could be prevented in systemd by starting the service after
+        // network-online.target but it requires that a wait-online.service is
+        // also enabled which is not always the case since a wait-online.service
+        // can potentially hang the boot process until it times out in certain situations.
+        // This allows for discovery to retry initially every 10 sec for up to 50 secs
         // before giving up thus papering over the issue and not holding up the boot process.
         let mut fail_count = 0;
-        let falure_limit = 6;
+        let falure_limit = 5;
         let retry_timeout = Duration::from_secs(10);
-        loop {
+
+        discovery = loop {
             let device_id = setup.session_config.device_id.clone();
             match librespot::discovery::Discovery::builder(device_id)
                 .name(setup.connect_config.name.clone())
@@ -1646,17 +1644,14 @@ async fn main() {
                 .zeroconf_ip(setup.zeroconf_ip.clone())
                 .launch()
             {
-                Ok(d) => {
-                    discovery = Some(d);
-                    break;
-                }
-                Err(err) => {
+                Ok(d) => break Some(d),
+                Err(e) => {
                     fail_count += 1;
-                    if fail_count < falure_limit {
+                    if fail_count != falure_limit {
                         tokio::time::sleep(retry_timeout).await;
                     } else {
-                        warn!("Could not initialise discovery: {}.", err);
-                        break;
+                        warn!("Could not initialise discovery: {e}.");
+                        break None;
                     }
                 }
             };
