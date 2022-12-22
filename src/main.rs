@@ -1629,10 +1629,9 @@ async fn main() {
         // network-online.target but it requires that a wait-online.service is
         // also enabled which is not always the case since a wait-online.service
         // can potentially hang the boot process until it times out in certain situations.
-        // This allows for discovery to retry initially every 10 sec for up to 50 secs
+        // This allows for discovery to retry every 10 secs in the 1st 60 secs of uptime
         // before giving up thus papering over the issue and not holding up the boot process.
-        let mut fail_count = 0;
-        let falure_limit = 5;
+        let one_min = Duration::from_secs(60);
         let retry_timeout = Duration::from_secs(10);
 
         discovery = loop {
@@ -1646,8 +1645,14 @@ async fn main() {
             {
                 Ok(d) => break Some(d),
                 Err(e) => {
-                    fail_count += 1;
-                    if fail_count != falure_limit {
+                    let is_first_min_of_uptime = match uptime_lib::get() {
+                        Ok(uptime) => uptime <= one_min,
+                        Err(e) => {
+                            warn!("Unable to determine system uptime: {e}");
+                            false
+                        }
+                    };
+                    if is_first_min_of_uptime {
                         tokio::time::sleep(retry_timeout).await;
                     } else {
                         warn!("Could not initialise discovery: {e}.");
