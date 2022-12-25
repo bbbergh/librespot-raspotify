@@ -1,6 +1,6 @@
 use futures_util::{future, FutureExt, StreamExt};
 use librespot_playback::player::PlayerEvent;
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use sha1::{Digest, Sha1};
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -1646,21 +1646,26 @@ async fn main() {
                 Ok(d) => break Some(d),
                 Err(e) => {
                     let is_first_min_of_uptime = match uptime_lib::get() {
-                        Ok(uptime) => uptime <= one_min,
-                        Err(e) => {
-                            warn!("Unable to determine system uptime: {e}");
+                        Ok(uptime) => {
+                            debug!("System uptime: {} secs", uptime.as_secs_f64());
+                            uptime <= one_min
+                        }
+                        Err(err) => {
+                            debug!("Unable to determine system uptime: {err}");
                             false
                         }
                     };
                     if is_first_min_of_uptime {
+                        debug!("Retrying to initialise discovery: {e}");
                         tokio::time::sleep(retry_timeout).await;
                     } else {
-                        warn!("Could not initialise discovery: {e}.");
+                        debug!("System uptime >= 60 secs, not retrying to initialise discovery");
+                        warn!("Could not initialise discovery: {e}");
                         break None;
                     }
                 }
-            };
-        }
+            }
+        };
     }
 
     if let Some(credentials) = setup.credentials {
