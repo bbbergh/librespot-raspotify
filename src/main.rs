@@ -42,10 +42,7 @@ fn usage(program: &str, opts: &getopts::Options) -> String {
     let repo_home = env!("CARGO_PKG_REPOSITORY");
     let desc = env!("CARGO_PKG_DESCRIPTION");
     let version = get_version_string();
-    let brief = format!(
-        "{}\n\n{}\n\n{}\n\nUsage: {} [<Options>]",
-        version, desc, repo_home, program
-    );
+    let brief = format!("{version}\n\n{desc}\n\n{repo_home}\n\nUsage: {program} [<Options>]");
     opts.usage(&brief)
 }
 
@@ -83,9 +80,9 @@ fn list_backends() {
     println!("Available backends: ");
     for (&(name, _), idx) in BACKENDS.iter().zip(0..) {
         if idx == 0 {
-            println!("- {} (default)", name);
+            println!("- {name} (default)");
         } else {
-            println!("- {}", name);
+            println!("- {name}");
         }
     }
 }
@@ -576,8 +573,7 @@ fn get_setup() -> Setup {
             Ok(valid) => Some(valid),
             Err(s) => {
                 eprintln!(
-                    "Command line argument was not valid Unicode and will not be evaluated: {:?}",
-                    s
+                    "Command line argument was not valid Unicode and will not be evaluated: {s:?}"
                 );
                 None
             }
@@ -587,7 +583,7 @@ fn get_setup() -> Setup {
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("Error parsing command line options: {}", e);
+            eprintln!("Error parsing command line options: {e}");
             println!("\n{}", usage(&args[0], &opts));
             exit(1);
         }
@@ -607,7 +603,7 @@ fn get_setup() -> Setup {
                 match v.into_string() {
                     Ok(value) => Some((key, value)),
                     Err(s) => {
-                        eprintln!("Environment variable was not valid Unicode and will not be evaluated: {}={:?}", key, s);
+                        eprintln!("Environment variable was not valid Unicode and will not be evaluated: {key}={s:?}");
                         None
                     }
                 }
@@ -722,11 +718,11 @@ fn get_setup() -> Setup {
             error!("Invalid `--{}` / `-{}`: \"{}\"", long, short, invalid);
 
             if !valid_values.is_empty() {
-                println!("Valid `--{}` / `-{}` values: {}", long, short, valid_values);
+                println!("Valid `--{long}` / `-{short}` values: {valid_values}");
             }
 
             if !default_value.is_empty() {
-                println!("Default: {}", default_value);
+                println!("Default: {default_value}");
             }
         };
 
@@ -1069,7 +1065,7 @@ fn get_setup() -> Setup {
                 match cached_creds {
                     Some(creds) if username == creds.username => Some(creds),
                     _ => {
-                        let prompt = &format!("Password for {}: ", username);
+                        let prompt = &format!("Password for {username}: ");
                         match rpassword::prompt_password(prompt) {
                             Ok(password) => {
                                 if !password.is_empty() {

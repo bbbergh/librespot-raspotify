@@ -998,13 +998,13 @@ impl SpircTask {
     }
 
     fn resolve_station(&self, uri: &str) -> BoxedFuture<Result<serde_json::Value, MercuryError>> {
-        let radio_uri = format!("hm://radio-apollo/v3/stations/{}", uri);
+        let radio_uri = format!("hm://radio-apollo/v3/stations/{uri}");
 
         self.resolve_uri(&radio_uri)
     }
 
     fn resolve_autoplay_uri(&self, uri: &str) -> BoxedFuture<Result<String, MercuryError>> {
-        let query_uri = format!("hm://autoplay-enabled/query?uri={}", uri);
+        let query_uri = format!("hm://autoplay-enabled/query?uri={uri}");
         let request = self.session.mercury().get(query_uri);
         Box::pin(
             async {

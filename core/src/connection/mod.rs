@@ -161,7 +161,7 @@ pub async fn authenticate(
             Err(error_data.into())
         }
         _ => {
-            let msg = format!("Received invalid packet: {}", cmd);
+            let msg = format!("Received invalid packet: {cmd}");
             Err(io::Error::new(ErrorKind::InvalidData, msg).into())
         }
     }

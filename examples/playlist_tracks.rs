@@ -32,7 +32,7 @@ async fn main() {
         .unwrap();
 
     let plist = Playlist::get(&session, plist_uri).await.unwrap();
-    println!("{:?}", plist);
+    println!("{plist:?}");
     for track_id in plist.tracks {
         let plist_track = Track::get(&session, track_id).await.unwrap();
         println!("track: {} ", plist_track.name);

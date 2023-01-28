@@ -346,7 +346,7 @@ impl AudioFileFetch {
         let mut output = self.output.take().unwrap();
         let complete_tx = self.complete_tx.take().unwrap();
 
-        output.seek(SeekFrom::Start(0)).unwrap();
+        output.rewind().unwrap();
         let _ = complete_tx.send(output);
     }
 }

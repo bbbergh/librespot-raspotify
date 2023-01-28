@@ -364,7 +364,7 @@ impl AudioFileStreaming {
 
         let mut write_file = NamedTempFile::new().unwrap();
         write_file.as_file().set_len(size as u64).unwrap();
-        write_file.seek(SeekFrom::Start(0)).unwrap();
+        write_file.rewind().unwrap();
 
         let read_file = write_file.reopen().unwrap();
 

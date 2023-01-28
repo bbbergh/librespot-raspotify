@@ -224,7 +224,7 @@ impl MercuryManager {
                     .collect::<Vec<String>>()
                     .join("/");
 
-                inner.subscriptions.retain(|&(ref prefix, ref sub)| {
+                inner.subscriptions.retain(|(prefix, sub)| {
                     if encoded_uri.starts_with(prefix) {
                         found = true;
 

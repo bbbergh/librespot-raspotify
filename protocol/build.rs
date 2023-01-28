@@ -55,7 +55,7 @@ fn generate_mod_rs() {
         .join("\n");
 
     let mod_rs = out_dir.join("mod.rs");
-    fs::write(&mod_rs, format!("// @generated\n{}\n", mods)).expect("write");
+    fs::write(&mod_rs, format!("// @generated\n{mods}\n")).expect("write");
 
     println!("cargo:rustc-env=PROTO_MOD_RS={}", mod_rs.to_string_lossy());
 }

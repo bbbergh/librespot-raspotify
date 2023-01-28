@@ -1085,12 +1085,10 @@ impl Future for PlayerInternal {
                                                     }
                                                 };
                                             if notify_about_position {
-                                                *reported_nominal_start_time = Some(
-                                                    Instant::now()
-                                                        - Duration::from_millis(
-                                                            stream_position_millis as u64,
-                                                        ),
-                                                );
+                                                *reported_nominal_start_time = Instant::now()
+                                                    .checked_sub(Duration::from_millis(
+                                                        stream_position_millis as u64,
+                                                    ));
                                                 self.send_event(PlayerEvent::Playing {
                                                     track_id,
                                                     play_request_id,
@@ -1494,9 +1492,8 @@ impl PlayerInternal {
                 duration_ms: loaded_track.duration_ms,
                 bytes_per_second: loaded_track.bytes_per_second,
                 stream_position_pcm: loaded_track.stream_position_pcm,
-                reported_nominal_start_time: Some(
-                    Instant::now() - Duration::from_millis(position_ms as u64),
-                ),
+                reported_nominal_start_time: Instant::now()
+                    .checked_sub(Duration::from_millis(position_ms as u64)),
                 suggested_to_preload_next_track: false,
             };
         } else {
@@ -1860,7 +1857,7 @@ impl PlayerInternal {
         } = self.state
         {
             *reported_nominal_start_time =
-                Some(Instant::now() - Duration::from_millis(position_ms as u64));
+                Instant::now().checked_sub(Duration::from_millis(position_ms as u64));
             self.send_event(PlayerEvent::Playing {
                 track_id,
                 play_request_id,

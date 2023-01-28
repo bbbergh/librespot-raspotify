@@ -92,7 +92,7 @@ impl AudioFiles for Track {
                 let item = Self::get(session, id).await?;
                 Ok(AudioItem {
                     id,
-                    uri: format!("spotify:track:{}", uri),
+                    uri: format!("spotify:track:{uri}"),
                     files: item.files,
                     name: item.name,
                     duration: item.duration,
@@ -116,7 +116,7 @@ impl AudioFiles for Episode {
                 let item = Self::get(session, id).await?;
                 Ok(AudioItem {
                     id,
-                    uri: format!("spotify:episode:{}", uri),
+                    uri: format!("spotify:episode:{uri}"),
                     files: item.files,
                     name: item.name,
                     duration: item.duration,
@@ -231,7 +231,7 @@ impl Metadata for Track {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base16()?;
-        Ok(format!("hm://metadata/3/track/{}", id))
+        Ok(format!("hm://metadata/3/track/{id}"))
     }
 
     fn parse(msg: &Self::Message, session: &Session) -> Result<Self, SpotifyIdError> {
@@ -285,7 +285,7 @@ impl Metadata for Album {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base16()?;
-        Ok(format!("hm://metadata/3/album/{}", id))
+        Ok(format!("hm://metadata/3/album/{id}"))
     }
 
     fn parse(msg: &Self::Message, _: &Session) -> Result<Self, SpotifyIdError> {
@@ -344,7 +344,7 @@ impl Metadata for Playlist {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base62()?;
-        Ok(format!("hm://playlist/v2/playlist/{}", id))
+        Ok(format!("hm://playlist/v2/playlist/{id}"))
     }
 
     fn parse(msg: &Self::Message, _: &Session) -> Result<Self, SpotifyIdError> {
@@ -381,7 +381,7 @@ impl Metadata for Artist {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base16()?;
-        Ok(format!("hm://metadata/3/artist/{}", id))
+        Ok(format!("hm://metadata/3/artist/{id}"))
     }
 
     fn parse(msg: &Self::Message, session: &Session) -> Result<Self, SpotifyIdError> {
@@ -420,7 +420,7 @@ impl Metadata for Episode {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base16()?;
-        Ok(format!("hm://metadata/3/episode/{}", id))
+        Ok(format!("hm://metadata/3/episode/{id}"))
     }
 
     fn parse(msg: &Self::Message, session: &Session) -> Result<Self, SpotifyIdError> {
@@ -469,7 +469,7 @@ impl Metadata for Show {
 
     fn request_url(id: SpotifyId) -> Result<String, FromUtf8Error> {
         let id = id.to_base16()?;
-        Ok(format!("hm://metadata/3/show/{}", id))
+        Ok(format!("hm://metadata/3/show/{id}"))
     }
 
     fn parse(msg: &Self::Message, _: &Session) -> Result<Self, SpotifyIdError> {

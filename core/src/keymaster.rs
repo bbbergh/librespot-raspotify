@@ -16,10 +16,7 @@ pub async fn get_token(
     client_id: &str,
     scopes: &str,
 ) -> Result<Token, MercuryError> {
-    let url = format!(
-        "hm://keymaster/token/authenticated?client_id={}&scope={}",
-        client_id, scopes
-    );
+    let url = format!("hm://keymaster/token/authenticated?client_id={client_id}&scope={scopes}");
     let response = session.mercury().get(url).await?;
     let data = response.payload.first().expect("Empty payload");
     serde_json::from_slice(data.as_ref()).map_err(|_| MercuryError)
