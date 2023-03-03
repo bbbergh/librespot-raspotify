@@ -3,6 +3,7 @@ mod receive;
 use std::cmp::{max, min};
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::process::exit;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -362,11 +363,24 @@ impl AudioFileStreaming {
             read_position: AtomicUsize::new(0),
         });
 
-        let mut write_file = NamedTempFile::new().unwrap();
+        let mut write_file = match NamedTempFile::new() {
+            Ok(file) => file,
+            Err(e) => {
+                error!("Error creating Named Temp File: {e}");
+                exit(1);
+            }
+        };
+
         write_file.as_file().set_len(size as u64).unwrap();
         write_file.rewind().unwrap();
 
-        let read_file = write_file.reopen().unwrap();
+        let read_file = match write_file.reopen() {
+            Ok(file) => file,
+            Err(e) => {
+                error!("Error reopening Named Temp File: {e}");
+                exit(1);
+            }
+        };
 
         // let (seek_tx, seek_rx) = mpsc::unbounded();
         let (stream_loader_command_tx, stream_loader_command_rx) =
