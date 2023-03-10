@@ -22,12 +22,13 @@ impl Default for SessionConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
 pub enum DeviceType {
     Unknown = 0,
     Computer = 1,
     Tablet = 2,
     Smartphone = 3,
+    #[default]
     Speaker = 4,
     Tv = 5,
     Avr = 6,
@@ -108,12 +109,6 @@ impl fmt::Display for DeviceType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let str: &str = self.into();
         f.write_str(str)
-    }
-}
-
-impl Default for DeviceType {
-    fn default() -> DeviceType {
-        DeviceType::Speaker
     }
 }
 
