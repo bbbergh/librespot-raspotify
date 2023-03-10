@@ -7,7 +7,7 @@ description = "An open source client library for Spotify, with support for Spoti
 keywords = ["spotify"]
 repository = "https://github.com/librespot-org/librespot"
 readme = "README.md"
-rust-version = "1.67"
+rust-version = "1.68"
 edition = "2021"
 
 [workspace]
@@ -52,15 +52,15 @@ version = "0.4.2"
 [dependencies]
 base64 = "0.13"
 env_logger =  {version = "0.9", default-features = false, features = ["termcolor","humantime","atty"]}
-futures-util = { version = "0.3", default_features = false }
+futures-util = { version = "0.3", default-features = false }
 getopts = "0.2.21"
 hex = "0.4"
 hyper = "0.14"
 log = "0.4"
-rpassword = "7.1"
+rpassword = "7.2"
 thiserror = "1.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "process"] }
-url = "2.2"
+url = "2.3"
 sha-1 = "0.9"
 uptime_lib = "0.2"
 

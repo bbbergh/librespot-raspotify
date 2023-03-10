@@ -14,8 +14,8 @@ version = "0.4.2"
 [dependencies]
 aes-ctr = "0.6"
 byteorder = "1.4"
-bytes = "1.0"
+bytes = "1.4"
 log = "0.4"
-futures-util = { version = "0.3", default_features = false }
-tempfile = "3.1"
+futures-util = { version = "0.3", default-features = false }
+tempfile = "3.4"
 tokio = { version = "1", features = ["sync", "macros"] }
