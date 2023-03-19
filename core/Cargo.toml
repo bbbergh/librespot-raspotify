@@ -38,7 +38,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha-1 = "0.9"
 shannon = "0.2.0"
-thiserror = "1.0.39"
+thiserror = "1.0.40"
 tokio = { version = "1.26", features = ["io-util", "net", "rt", "sync"] }
 tokio-stream = "0.1.12"
 tokio-util = { version = "0.7", features = ["codec"] }
