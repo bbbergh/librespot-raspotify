@@ -202,10 +202,8 @@ fn initial_device_state(config: ConnectConfig) -> DeviceState {
                 msg.set_typ(protocol::spirc::CapabilityType::kSupportedTypes);
                 {
                     let repeated = msg.mut_stringValue();
-                    repeated.push(::std::convert::Into::into("audio/local"));
                     repeated.push(::std::convert::Into::into("audio/track"));
                     repeated.push(::std::convert::Into::into("audio/episode"));
-                    repeated.push(::std::convert::Into::into("local"));
                     repeated.push(::std::convert::Into::into("track"))
                 };
                 msg

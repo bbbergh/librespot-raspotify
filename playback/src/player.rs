@@ -1285,7 +1285,8 @@ impl PlayerInternal {
             });
             self.ensure_sink_running();
         } else {
-            warn!("Player::play called from invalid state");
+            error!("Player::play called from invalid state");
+            exit(1);
         }
     }
 
@@ -1309,7 +1310,8 @@ impl PlayerInternal {
                 duration_ms,
             });
         } else {
-            warn!("Player::pause called from invalid state");
+            error!("Player::pause called from invalid state");
+            exit(1);
         }
     }
 
@@ -1837,7 +1839,8 @@ impl PlayerInternal {
                 Err(e) => error!("PlayerInternal handle_command_seek: {}", e),
             }
         } else {
-            warn!("Player::seek called from invalid state");
+            error!("Player::seek called from invalid state");
+            exit(1);
         }
 
         // If we're playing, ensure, that we have enough data leaded to avoid a buffer underrun.
