@@ -109,8 +109,6 @@ pub struct AlsaSink {
     pcm: Option<PCM>,
     format: AudioFormat,
     device: String,
-    buffer_size: Frames,
-    period_size: Frames,
     period_buffer: Vec<u8>,
 }
 
@@ -197,8 +195,6 @@ impl Open for AlsaSink {
             pcm: None,
             format,
             device: name,
-            buffer_size: 0,
-            period_size: 0,
             period_buffer: vec![],
         }
     }
@@ -443,80 +439,60 @@ impl AlsaSink {
                 }
             })?;
 
-            if self.buffer_size != 0 && self.period_size != 0 {
-                // Use the cached buffer and period sizes to avoid
-                // recalculating them.
-                hwp.set_buffer_size_near(self.buffer_size)
-                    .map_err(AlsaError::HwParams)?;
+            // Calculate a buffer and period size as close
+            // to optimal as possible.
 
-                hwp.set_period_size_near(self.period_size, ValueOr::Nearest)
-                    .map_err(AlsaError::HwParams)?;
+            // hwp continuity is very important.
+            let hwp_clone = hwp.clone();
 
-                pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
-
-                let swp = pcm.sw_params_current().map_err(AlsaError::Pcm)?;
-
-                swp.set_start_threshold(self.buffer_size - self.period_size)
-                    .map_err(AlsaError::SwParams)?;
-
-                pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
+            if Self::set_period_and_buffer_size(&hwp_clone) {
+                pcm.hw_params(&hwp_clone).map_err(AlsaError::Pcm)?;
             } else {
-                // The initial opening of the card.
-                // Calculate a buffer and period size as close
-                // to optimal as possible.
-
-                // hwp continuity is very important.
-                let hwp_clone = hwp.clone();
-
-                if Self::set_period_and_buffer_size(&hwp_clone) {
-                    pcm.hw_params(&hwp_clone).map_err(AlsaError::Pcm)?;
-                } else {
-                    pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
-                }
-
-                let hwp = pcm.hw_params_current().map_err(AlsaError::Pcm)?;
-
-                // Don't assume we got what we wanted. Ask to make sure.
-                self.buffer_size = hwp.get_buffer_size().map_err(AlsaError::HwParams)?;
-
-                self.period_size = hwp.get_period_size().map_err(AlsaError::HwParams)?;
-
-                let swp = pcm.sw_params_current().map_err(AlsaError::Pcm)?;
-
-                swp.set_start_threshold(self.buffer_size - self.period_size)
-                    .map_err(AlsaError::SwParams)?;
-
-                pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
-
-                if self.buffer_size != OPTIMAL_BUFFER {
-                    trace!("A Buffer Size of {} Frames is Suboptimal", self.buffer_size);
-
-                    if self.buffer_size < OPTIMAL_BUFFER {
-                        trace!("A smaller than necessary Buffer Size can lead to underruns (audio glitches) and high CPU usage.");
-                    } else {
-                        trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");
-                    }
-                }
-
-                let optimal_period = self.buffer_size / OPTIMAL_PERIODS;
-
-                if self.period_size != optimal_period {
-                    trace!("A Period Size of {} Frames is Suboptimal", self.period_size);
-
-                    if self.period_size < optimal_period {
-                        trace!("A smaller than necessary Period Size relative to Buffer Size can lead to high CPU usage.");
-                    } else {
-                        trace!("A larger than necessary Period Size relative to Buffer Size can lessen underrun (audio glitch) protection.");
-                    }
-                }
-
-                // Let ALSA do the math for us.
-                let bytes_per_period = pcm.frames_to_bytes(self.period_size) as usize;
-
-                trace!("Period Buffer size in bytes: {bytes_per_period}");
-
-                self.period_buffer = Vec::with_capacity(bytes_per_period);
+                pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
             }
+
+            let hwp = pcm.hw_params_current().map_err(AlsaError::Pcm)?;
+
+            // Don't assume we got what we wanted. Ask to make sure.
+            let buffer_size = hwp.get_buffer_size().map_err(AlsaError::HwParams)?;
+
+            let period_size = hwp.get_period_size().map_err(AlsaError::HwParams)?;
+
+            let swp = pcm.sw_params_current().map_err(AlsaError::Pcm)?;
+
+            swp.set_start_threshold(buffer_size - period_size)
+                .map_err(AlsaError::SwParams)?;
+
+            pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
+
+            if buffer_size != OPTIMAL_BUFFER {
+                trace!("A Buffer Size of {} Frames is Suboptimal", buffer_size);
+
+                if buffer_size < OPTIMAL_BUFFER {
+                    trace!("A smaller than necessary Buffer Size can lead to underruns (audio glitches) and high CPU usage.");
+                } else {
+                    trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");
+                }
+            }
+
+            let optimal_period = buffer_size / OPTIMAL_PERIODS;
+
+            if period_size != optimal_period {
+                trace!("A Period Size of {} Frames is Suboptimal", period_size);
+
+                if period_size < optimal_period {
+                    trace!("A smaller than necessary Period Size relative to Buffer Size can lead to high CPU usage.");
+                } else {
+                    trace!("A larger than necessary Period Size relative to Buffer Size can lessen underrun (audio glitch) protection.");
+                }
+            }
+
+            // Let ALSA do the math for us.
+            let bytes_per_period = pcm.frames_to_bytes(period_size) as usize;
+
+            trace!("Period Buffer size in bytes: {bytes_per_period}");
+
+            self.period_buffer = Vec::with_capacity(bytes_per_period);
         }
 
         self.pcm = Some(pcm);
