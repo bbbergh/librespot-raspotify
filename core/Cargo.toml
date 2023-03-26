@@ -39,7 +39,7 @@ serde_json = "1.0"
 sha-1 = "0.9"
 shannon = "0.2.0"
 thiserror = "1.0.40"
-tokio = { version = "1.26", features = ["io-util", "net", "rt", "sync"] }
+tokio = { version = "1.27", features = ["io-util", "net", "rt", "sync"] }
 tokio-stream = "0.1.12"
 tokio-util = { version = "0.7", features = ["codec"] }
 url = "2.3"
@@ -51,4 +51,4 @@ vergen = "3.2.0"
 
 [dev-dependencies]
 env_logger = "0.9"
-tokio = {version = "1.26", features = ["macros"] }
+tokio = {version = "1.27", features = ["macros"] }
