@@ -40,6 +40,19 @@ impl From<PulseError> for SinkError {
     }
 }
 
+impl From<AudioFormat> for pulse::sample::Format {
+    fn from(f: AudioFormat) -> pulse::sample::Format {
+        use AudioFormat::*;
+        match f {
+            F64 | F32 => pulse::sample::Format::FLOAT32NE,
+            S32 => pulse::sample::Format::S32NE,
+            S24 => pulse::sample::Format::S24_32NE,
+            S24_3 => pulse::sample::Format::S24NE,
+            S16 => pulse::sample::Format::S16NE,
+        }
+    }
+}
+
 pub struct PulseAudioSink {
     sink: Option<Simple>,
     device: Option<String>,
@@ -54,26 +67,17 @@ impl Open for PulseAudioSink {
         let app_name = env::var("PULSE_PROP_application.name").unwrap_or_default();
         let stream_desc = env::var("PULSE_PROP_stream.description").unwrap_or_default();
 
-        let mut actual_format = format;
-
-        if actual_format == AudioFormat::F64 {
+        let format = if format == AudioFormat::F64 {
             warn!("PulseAudio currently does not support F64 output");
-            actual_format = AudioFormat::F32;
-        }
-
-        info!("Using PulseAudioSink with format: {actual_format:?}");
-
-        let pulse_format = match actual_format {
-            AudioFormat::F32 => pulse::sample::Format::FLOAT32NE,
-            AudioFormat::S32 => pulse::sample::Format::S32NE,
-            AudioFormat::S24 => pulse::sample::Format::S24_32NE,
-            AudioFormat::S24_3 => pulse::sample::Format::S24NE,
-            AudioFormat::S16 => pulse::sample::Format::S16NE,
-            _ => unreachable!(),
+            AudioFormat::F32
+        } else {
+            format
         };
 
+        info!("Using PulseAudioSink with format: {format:?}");
+
         let sample_spec = pulse::sample::Spec {
-            format: pulse_format,
+            format: format.into(),
             channels: NUM_CHANNELS,
             rate: SAMPLE_RATE,
         };
@@ -83,7 +87,7 @@ impl Open for PulseAudioSink {
             device,
             app_name,
             stream_desc,
-            format: actual_format,
+            format,
             sample_spec,
         }
     }
