@@ -136,7 +136,7 @@ fn list_compatible_devices() -> SinkResult<()> {
                                 let supported_formats: Vec<String> = FORMATS
                                     .iter()
                                     .filter_map(|f| {
-                                        if hwp.test_format(Format::from(*f)).is_ok() {
+                                        if hwp.test_format((*f).into()).is_ok() {
                                             Some(format!("{f:?}"))
                                         } else {
                                             None
@@ -387,13 +387,13 @@ impl AlsaSink {
                 }
             })?;
 
-            let alsa_format = Format::from(self.format);
+            let alsa_format = self.format.into();
 
             hwp.set_format(alsa_format).map_err(|e| {
                 let supported_formats: Vec<String> = FORMATS
                     .iter()
                     .filter_map(|f| {
-                        if hwp.test_format(Format::from(*f)).is_ok() {
+                        if hwp.test_format((*f).into()).is_ok() {
                             Some(format!("{f:?}"))
                         } else {
                             None

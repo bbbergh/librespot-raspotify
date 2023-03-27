@@ -104,7 +104,7 @@ impl Sink for PulseAudioSink {
                     rate: SAMPLE_RATE,
                 };
 
-                return Err(SinkError::from(pulse_error));
+                return Err(pulse_error.into());
             }
 
             let sink = Simple::new(
