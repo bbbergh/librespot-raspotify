@@ -17,5 +17,5 @@ byteorder = "1.4"
 bytes = "1.4"
 log = "0.4"
 futures-util = { version = "0.3", default-features = false }
-tempfile = "3.4"
+tempfile = "3.5"
 tokio = { version = "1", features = ["sync", "macros"] }
