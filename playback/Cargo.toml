@@ -46,7 +46,7 @@ cpal            = { version = "0.13", optional = true }
 
 # Decoder
 lewton = "0.10"
-ogg = "0.8"
+ogg = "0.9"
 
 # Dithering
 rand = { version = "0.8", features = ["small_rng"] }
