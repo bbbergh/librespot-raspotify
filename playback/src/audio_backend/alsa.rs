@@ -314,7 +314,7 @@ impl AlsaSink {
             .clone()
             .get_buffer_size_max()
             .unwrap_or(0)
-            .min(period_size * OPTIMAL_PERIODS * 2);
+            .min(period_size * OPTIMAL_PERIODS * NUM_CHANNELS as Frames);
 
         if min_buffer >= max_buffer {
             trace!("Error getting Buffer Size, falling back to the device's defaults");
