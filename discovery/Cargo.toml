@@ -32,7 +32,7 @@ version = "0.4.2"
 [dev-dependencies]
 futures = "0.3"
 hex = "0.4"
-simple_logger = "2.3"
+simple_logger = "4"
 tokio = { version = "1.27", features = ["macros", "rt"] }
 
 [features]
