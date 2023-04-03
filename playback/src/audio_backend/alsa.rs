@@ -316,58 +316,33 @@ impl AlsaSink {
             OPTIMAL_BUFFER
         } else {
             let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or(0);
+            let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or(0);
 
-            if min_buffer < period_size * MIN_PERIODS {
-                trace!(
-                "Error getting Buffer Size, Min Buffer Size must be at least twice the Period Size"
-            );
-
+            if min_buffer > max_buffer {
+                trace!("Error getting Buffer Size, Min Buffer Size can not be greater than Max Buffer Size");
                 trace!("Falling back to the device's defaults");
 
                 0
             } else {
-                let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or(0);
+                let supported_buffer_range = min_buffer..=max_buffer;
 
-                if min_buffer > max_buffer {
-                    trace!("Error getting Buffer Size, Min Buffer Size can not be greater than Max Buffer Size");
-                    trace!("Falling back to the device's defaults");
+                let closest_buffer_size = supported_buffer_range
+                    .into_iter()
+                    .filter(|b| {
+                        b % period_size == 0
+                            && b >= &(period_size * MIN_PERIODS)
+                            && hwp.clone().set_buffer_size_near(*b).unwrap_or(0) == *b
+                    })
+                    .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
+                    .unwrap_or_default();
 
-                    0
+                if closest_buffer_size > 0 {
+                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {closest_buffer_size}");
                 } else {
-                    let supported_buffer_range = min_buffer..=max_buffer;
-
-                    trace!("Supported Buffer Range in Frames: {supported_buffer_range:?}");
-
-                    if supported_buffer_range.contains(&OPTIMAL_BUFFER)
-                        && hwp
-                            .clone()
-                            .set_buffer_size_near(OPTIMAL_BUFFER)
-                            .unwrap_or(0)
-                            == OPTIMAL_BUFFER
-                    {
-                        trace!(
-                            "The Optimal Buffer Size ({OPTIMAL_BUFFER}) is in Range and Supported"
-                        );
-
-                        OPTIMAL_BUFFER
-                    } else {
-                        let closest_buffer_size = supported_buffer_range
-                            .into_iter()
-                            .filter(|b| hwp.clone().set_buffer_size_near(*b).unwrap_or(0) == *b)
-                            .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
-                            .unwrap_or_default();
-
-                        if closest_buffer_size > 0 {
-                            trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {closest_buffer_size}");
-                        } else {
-                            trace!(
-                                "Error getting Buffer Size, falling back to the device's defaults"
-                            );
-                        }
-
-                        closest_buffer_size
-                    }
+                    trace!("Error getting Buffer Size, falling back to the device's defaults");
                 }
+
+                closest_buffer_size
             }
         }
     }
