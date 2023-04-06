@@ -261,18 +261,18 @@ impl AlsaSink {
         if hwp
             .clone()
             .set_period_size_near(OPTIMAL_PERIOD, ValueOr::Nearest)
-            .unwrap_or(0)
+            .unwrap_or_default()
             == OPTIMAL_PERIOD
         {
             trace!("The Optimal Period Size ({OPTIMAL_PERIOD}) is Supported");
 
             OPTIMAL_PERIOD
         } else {
-            let min_period = hwp.clone().get_period_size_min().unwrap_or(0);
-            let max_period = hwp.clone().get_period_size_max().unwrap_or(0);
+            let min_period = hwp.clone().get_period_size_min().unwrap_or_default();
+            let max_period = hwp.clone().get_period_size_max().unwrap_or_default();
 
             if min_period > max_period {
-                trace!("Error getting Period Size, Min Period Size can not be greater than Max Period Size");
+                trace!("Error getting Period Sizes, Min Period Size can not be greater than Max Period Size");
                 trace!("Falling back to the device's defaults");
 
                 0
@@ -286,7 +286,7 @@ impl AlsaSink {
                     .filter(|p| {
                         hwp.clone()
                             .set_period_size_near(*p, ValueOr::Nearest)
-                            .unwrap_or(0)
+                            .unwrap_or_default()
                             == *p
                     })
                     .min_by_key(|p| p.abs_diff(OPTIMAL_PERIOD))
@@ -308,18 +308,18 @@ impl AlsaSink {
             && hwp
                 .clone()
                 .set_buffer_size_near(OPTIMAL_BUFFER)
-                .unwrap_or(0)
+                .unwrap_or_default()
                 == OPTIMAL_BUFFER
         {
             trace!("The Optimal Buffer Size ({OPTIMAL_BUFFER}) is Supported");
 
             OPTIMAL_BUFFER
         } else {
-            let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or(0);
-            let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or(0);
+            let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or_default();
+            let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or_default();
 
             if min_buffer > max_buffer {
-                trace!("Error getting Buffer Size, Min Buffer Size can not be greater than Max Buffer Size");
+                trace!("Error getting Buffer Sizes, Min Buffer Size can not be greater than Max Buffer Size");
                 trace!("Falling back to the device's defaults");
 
                 0
@@ -330,8 +330,8 @@ impl AlsaSink {
                     .into_iter()
                     .filter(|b| {
                         b % period_size == 0
-                            && b >= &(period_size * MIN_PERIODS)
-                            && hwp.clone().set_buffer_size_near(*b).unwrap_or(0) == *b
+                            && *b >= period_size * MIN_PERIODS
+                            && hwp.clone().set_buffer_size_near(*b).unwrap_or_default() == *b
                     })
                     .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
                     .unwrap_or_default();
