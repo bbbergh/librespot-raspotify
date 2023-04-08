@@ -271,18 +271,15 @@ impl AlsaSink {
             let min_period = hwp.clone().get_period_size_min().unwrap_or_default();
             let max_period = hwp.clone().get_period_size_max().unwrap_or_default();
 
+            trace!("Supported Period Range in Frames: {min_period} - {max_period}");
+
             if min_period > max_period {
                 trace!("Error getting Period Sizes, Min Period Size can not be greater than Max Period Size");
                 trace!("Falling back to the device's defaults");
 
                 0
             } else {
-                let supported_period_range = min_period..=max_period;
-
-                trace!("Supported Period Range in Frames: {supported_period_range:?}");
-
-                let closest_period_size = supported_period_range
-                    .into_iter()
+                let closest_period_size = (min_period..=max_period)
                     .filter(|p| {
                         hwp.clone()
                             .set_period_size_near(*p, ValueOr::Nearest)
@@ -318,17 +315,19 @@ impl AlsaSink {
             let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or_default();
             let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or_default();
 
+            trace!("Supported Buffer Range in Frames: {min_buffer} - {max_buffer}");
+
             if min_buffer > max_buffer {
                 trace!("Error getting Buffer Sizes, Min Buffer Size can not be greater than Max Buffer Size");
                 trace!("Falling back to the device's defaults");
 
                 0
             } else {
-                let supported_buffer_range = min_buffer..=max_buffer;
-
-                let closest_buffer_size = supported_buffer_range
-                    .into_iter()
+                let closest_buffer_size = (min_buffer..=max_buffer)
                     .filter(|b| {
+                        // Only actually test buffer sizes that
+                        // are multiples of and greater than 2
+                        // times the period size.
                         b % period_size == 0
                             && *b >= period_size * MIN_PERIODS
                             && hwp.clone().set_buffer_size_near(*b).unwrap_or_default() == *b
@@ -348,16 +347,21 @@ impl AlsaSink {
     }
 
     fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
+        // HwParams are cloned extensively in this process
+        // because if/when it throws an error it could becomes
+        // unusable.
         let period_size = Self::get_period_size(hwp);
 
         if period_size > 0
             && hwp
                 .set_period_size_near(period_size, ValueOr::Nearest)
-                .is_ok()
+                .unwrap_or_default()
+                == period_size
         {
             let buffer_size = Self::get_buffer_size(hwp, period_size);
 
-            return buffer_size > 0 && hwp.set_buffer_size_near(buffer_size).is_ok();
+            return buffer_size > 0
+                && hwp.set_buffer_size_near(buffer_size).unwrap_or_default() == buffer_size;
         }
 
         false
