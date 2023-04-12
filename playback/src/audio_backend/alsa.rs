@@ -9,8 +9,11 @@ use alsa::{Direction, ValueOr};
 use std::process::exit;
 use thiserror::Error;
 
+const MAX_BUFFER: Frames = SAMPLE_RATE as Frames;
 const OPTIMAL_BUFFER: Frames = SAMPLE_RATE as Frames / 2;
+const MAX_PERIOD: Frames = SAMPLE_RATE as Frames / 5;
 const OPTIMAL_PERIOD: Frames = SAMPLE_RATE as Frames / 10;
+const MIN_PERIOD: Frames = SAMPLE_RATE as Frames / 100;
 const OPTIMAL_PERIODS: Frames = 5;
 const MIN_PERIODS: Frames = 2;
 
@@ -279,6 +282,11 @@ impl AlsaSink {
 
                 0
             } else {
+                let min_period = min_period.max(MIN_PERIOD);
+                let max_period = max_period.min(MAX_PERIOD);
+
+                trace!("Testing Period Sizes: {min_period} - {max_period}");
+
                 let closest_period_size = (min_period..=max_period)
                     .filter(|p| {
                         hwp.clone()
@@ -323,13 +331,14 @@ impl AlsaSink {
 
                 0
             } else {
+                let min_buffer = min_buffer.max(period_size * MIN_PERIODS);
+                let max_buffer = max_buffer.min(MAX_BUFFER);
+
+                trace!("Testing Buffer Sizes: {min_buffer} - {max_buffer}, in {period_size} Frame increments");
+
                 let closest_buffer_size = (min_buffer..=max_buffer)
                     .filter(|b| {
-                        // Only actually test buffer sizes that
-                        // are multiples of and greater than 2
-                        // times the period size.
                         b % period_size == 0
-                            && *b >= period_size * MIN_PERIODS
                             && hwp.clone().set_buffer_size_near(*b).unwrap_or_default() == *b
                     })
                     .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
