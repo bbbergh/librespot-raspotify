@@ -17,7 +17,7 @@ hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
 libmdns = "0.7"
 log = "0.4"
 rand = "0.8"
-serde_json = "1.0.95"
+serde_json = "1.0.96"
 sha-1 = "0.9"
 thiserror = "1.0"
 tokio = { version = "1.27", features = ["sync", "rt"] }
