@@ -9,13 +9,9 @@ use alsa::{Direction, ValueOr};
 use std::process::exit;
 use thiserror::Error;
 
-const MAX_BUFFER: Frames = SAMPLE_RATE as Frames;
 const OPTIMAL_BUFFER: Frames = SAMPLE_RATE as Frames / 2;
-const MAX_PERIOD: Frames = SAMPLE_RATE as Frames / 5;
 const OPTIMAL_PERIOD: Frames = SAMPLE_RATE as Frames / 10;
-const MIN_PERIOD: Frames = SAMPLE_RATE as Frames / 100;
 const OPTIMAL_PERIODS: Frames = 5;
-const MIN_PERIODS: Frames = 2;
 
 const COMMON_SAMPLE_RATES: [u32; 14] = [
     8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600,
@@ -260,117 +256,39 @@ impl SinkAsBytes for AlsaSink {
 impl AlsaSink {
     pub const NAME: &'static str = "alsa";
 
-    fn get_period_size(hwp: &HwParams) -> Frames {
-        if hwp
-            .clone()
-            .set_period_size_near(OPTIMAL_PERIOD, ValueOr::Nearest)
-            .unwrap_or_default()
-            == OPTIMAL_PERIOD
-        {
-            trace!("The Optimal Period Size ({OPTIMAL_PERIOD}) is Supported");
+    fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
+        let period_size = {
+            let period_size = hwp
+                .set_period_size_near(OPTIMAL_PERIOD, ValueOr::Nearest)
+                .unwrap_or_default();
 
-            OPTIMAL_PERIOD
-        } else {
-            let min_period = hwp.clone().get_period_size_min().unwrap_or_default();
-            let max_period = hwp.clone().get_period_size_max().unwrap_or_default();
-
-            trace!("Supported Period Range in Frames: {min_period} - {max_period}");
-
-            if min_period > max_period {
-                trace!("Error getting Period Sizes, Min Period Size can not be greater than Max Period Size");
-                trace!("Falling back to the device's defaults");
-
-                0
+            if period_size > 0 {
+                trace!(
+                    "Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD}): {period_size}"
+                );
             } else {
-                let min_period = min_period.max(MIN_PERIOD);
-                let max_period = max_period.min(MAX_PERIOD);
-
-                trace!("Testing Period Sizes: {min_period} - {max_period}");
-
-                let closest_period_size = (min_period..=max_period)
-                    .filter(|p| {
-                        hwp.clone()
-                            .set_period_size_near(*p, ValueOr::Nearest)
-                            .unwrap_or_default()
-                            == *p
-                    })
-                    .min_by_key(|p| p.abs_diff(OPTIMAL_PERIOD))
-                    .unwrap_or_default();
-
-                if closest_period_size > 0 {
-                    trace!("Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD}): {closest_period_size}");
-                } else {
-                    trace!("Error getting Period Size, falling back to the device's defaults");
-                }
-
-                closest_period_size
+                trace!("Error getting Period Size, falling back to the device's defaults");
             }
-        }
-    }
 
-    fn get_buffer_size(hwp: &HwParams, period_size: Frames) -> Frames {
-        if period_size * OPTIMAL_PERIODS == OPTIMAL_BUFFER
-            && hwp
-                .clone()
-                .set_buffer_size_near(OPTIMAL_BUFFER)
-                .unwrap_or_default()
-                == OPTIMAL_BUFFER
-        {
-            trace!("The Optimal Buffer Size ({OPTIMAL_BUFFER}) is Supported");
+            period_size
+        };
 
-            OPTIMAL_BUFFER
-        } else {
-            let min_buffer = hwp.clone().get_buffer_size_min().unwrap_or_default();
-            let max_buffer = hwp.clone().get_buffer_size_max().unwrap_or_default();
-
-            trace!("Supported Buffer Range in Frames: {min_buffer} - {max_buffer}");
-
-            if min_buffer > max_buffer {
-                trace!("Error getting Buffer Sizes, Min Buffer Size can not be greater than Max Buffer Size");
-                trace!("Falling back to the device's defaults");
-
-                0
-            } else {
-                let min_buffer = min_buffer.max(period_size * MIN_PERIODS);
-                let max_buffer = max_buffer.min(MAX_BUFFER);
-
-                trace!("Testing Buffer Sizes: {min_buffer} - {max_buffer}, in {period_size} Frame increments");
-
-                let closest_buffer_size = (min_buffer..=max_buffer)
-                    .filter(|b| {
-                        b % period_size == 0
-                            && hwp.clone().set_buffer_size_near(*b).unwrap_or_default() == *b
-                    })
-                    .min_by_key(|b| b.abs_diff(OPTIMAL_BUFFER))
+        if period_size > 0 {
+            let buffer_size = {
+                let buffer_size = hwp
+                    .set_buffer_size_near(period_size * OPTIMAL_PERIODS)
                     .unwrap_or_default();
 
-                if closest_buffer_size > 0 {
-                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {closest_buffer_size}");
+                if buffer_size > 0 {
+                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {buffer_size}");
                 } else {
                     trace!("Error getting Buffer Size, falling back to the device's defaults");
                 }
 
-                closest_buffer_size
-            }
-        }
-    }
+                buffer_size
+            };
 
-    fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
-        // HwParams are cloned extensively in this process
-        // because if/when it throws an error it could becomes
-        // unusable.
-        let period_size = Self::get_period_size(hwp);
-
-        if period_size > 0
-            && hwp
-                .set_period_size_near(period_size, ValueOr::Nearest)
-                .unwrap_or_default()
-                == period_size
-        {
-            let buffer_size = Self::get_buffer_size(hwp, period_size);
-
-            return buffer_size > 0
-                && hwp.set_buffer_size_near(buffer_size).unwrap_or_default() == buffer_size;
+            return buffer_size > 0;
         }
 
         false
