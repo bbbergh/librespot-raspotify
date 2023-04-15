@@ -9,9 +9,10 @@ use alsa::{Direction, ValueOr};
 use std::process::exit;
 use thiserror::Error;
 
-const OPTIMAL_BUFFER: Frames = SAMPLE_RATE as Frames / 2;
-const OPTIMAL_PERIOD: Frames = SAMPLE_RATE as Frames / 10;
-const OPTIMAL_PERIODS: Frames = 5;
+const OPTIMAL_BUFFER_SIZE: Frames = SAMPLE_RATE as Frames / 2;
+const OPTIMAL_PERIOD_SIZE: Frames = SAMPLE_RATE as Frames / 10;
+const OPTIMAL_NUM_PERIODS: Frames = 5;
+const MIN_NUM_PERIODS: Frames = 2;
 
 const COMMON_SAMPLE_RATES: [u32; 14] = [
     8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600,
@@ -259,12 +260,12 @@ impl AlsaSink {
     fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
         let period_size = {
             let period_size = hwp
-                .set_period_size_near(OPTIMAL_PERIOD, ValueOr::Nearest)
+                .set_period_size_near(OPTIMAL_PERIOD_SIZE, ValueOr::Nearest)
                 .unwrap_or_default();
 
             if period_size > 0 {
                 trace!(
-                    "Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD}): {period_size}"
+                    "Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD_SIZE}): {period_size}"
                 );
             } else {
                 trace!("Error getting Period Size, falling back to the device's defaults");
@@ -276,16 +277,18 @@ impl AlsaSink {
         if period_size > 0 {
             let buffer_size = {
                 let buffer_size = hwp
-                    .set_buffer_size_near(period_size * OPTIMAL_PERIODS)
+                    .set_buffer_size_near(
+                        (period_size * OPTIMAL_NUM_PERIODS).max(OPTIMAL_BUFFER_SIZE),
+                    )
                     .unwrap_or_default();
 
-                if buffer_size > 0 {
-                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER}): {buffer_size}");
+                if buffer_size >= period_size * MIN_NUM_PERIODS {
+                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER_SIZE}): {buffer_size}");
+                    buffer_size
                 } else {
                     trace!("Error getting Buffer Size, falling back to the device's defaults");
+                    0
                 }
-
-                buffer_size
             };
 
             return buffer_size > 0;
@@ -390,22 +393,22 @@ impl AlsaSink {
 
             pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
 
-            if buffer_size != OPTIMAL_BUFFER {
+            if buffer_size != OPTIMAL_BUFFER_SIZE {
                 trace!("A Buffer Size of {buffer_size} Frames is Suboptimal");
 
-                if buffer_size < OPTIMAL_BUFFER {
+                if buffer_size < OPTIMAL_BUFFER_SIZE {
                     trace!("A smaller than necessary Buffer Size can lead to underruns (audio glitches) and high CPU usage.");
                 } else {
                     trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");
                 }
             }
 
-            let optimal_period = buffer_size / OPTIMAL_PERIODS;
+            let optimal_period_size = buffer_size / OPTIMAL_NUM_PERIODS;
 
-            if period_size != optimal_period {
+            if period_size != optimal_period_size {
                 trace!("A Period Size of {period_size} Frames is Suboptimal");
 
-                if period_size < optimal_period {
+                if period_size < optimal_period_size {
                     trace!("A smaller than necessary Period Size relative to Buffer Size can lead to high CPU usage.");
                 } else {
                     trace!("A larger than necessary Period Size relative to Buffer Size can lessen underrun (audio glitch) protection.");
