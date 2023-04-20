@@ -318,7 +318,7 @@ impl AlsaSink {
             let alsa_format = self.format.into();
 
             hwp.set_format(alsa_format).map_err(|e| {
-                let supported_formats: Vec<String> = FORMATS
+                let supported_formats = FORMATS
                     .iter()
                     .filter_map(|f| {
                         if hwp.test_format((*f).into()).is_ok() {
@@ -339,7 +339,7 @@ impl AlsaSink {
             })?;
 
             hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).map_err(|e| {
-                let supported_rates: Vec<u32> = (hwp.get_rate_min().unwrap_or_default()
+                let supported_rates = (hwp.get_rate_min().unwrap_or_default()
                     ..=hwp.get_rate_max().unwrap_or_default())
                     .filter(|r| COMMON_SAMPLE_RATES.contains(r) && hwp.test_rate(*r).is_ok())
                     .collect();
@@ -353,11 +353,10 @@ impl AlsaSink {
             })?;
 
             hwp.set_channels(NUM_CHANNELS as u32).map_err(|e| {
-                let supported_channel_counts: Vec<u32> =
-                    (hwp.get_channels_min().unwrap_or_default()
-                        ..=hwp.get_channels_max().unwrap_or_default())
-                        .filter(|c| hwp.test_channels(*c).is_ok())
-                        .collect();
+                let supported_channel_counts = (hwp.get_channels_min().unwrap_or_default()
+                    ..=hwp.get_channels_max().unwrap_or_default())
+                    .filter(|c| hwp.test_channels(*c).is_ok())
+                    .collect();
 
                 AlsaError::UnsupportedChannelCount {
                     device: self.device.clone(),
