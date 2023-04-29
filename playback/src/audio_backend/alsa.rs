@@ -429,12 +429,33 @@ impl AlsaSink {
 
     fn write_buf(&mut self) -> SinkResult<()> {
         if let Some(pcm) = self.pcm.as_mut() {
-            if let Err(e) = pcm.io_bytes().writei(&self.period_buffer) {
-                // Capture and log the original error as a warning, and then try to recover.
-                // If recovery fails then forward that error back to player.
-                warn!("Error writing from AlsaSink buffer to PCM, trying to recover, {e}");
+            let mut start_index = 0;
+            let buffer_len = self.period_buffer.len();
+            let io_bytes = pcm.io_bytes();
 
-                pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
+            loop {
+                // Try to make sure the whole buffer is actually written.
+                match io_bytes.writei(&self.period_buffer[start_index..]) {
+                    Ok(num_frames_written) => {
+                        start_index += pcm.frames_to_bytes(num_frames_written as Frames) as usize;
+
+                        if start_index == buffer_len {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        // Capture and log the original error as a warning, and then try to recover.
+                        // If recovery fails then forward that error back to player.
+                        warn!("Error writing from AlsaSink buffer to PCM, trying to recover, {e}");
+
+                        pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
+                        // Don't retry writing the buffer even if recovery is successful
+                        // because we have no way of knowing how much if any of it was actually written.
+                        // So just drop it.
+                        warn!("Dropping remaining AlsaSink buffer");
+                        break;
+                    }
+                }
             }
         }
 
