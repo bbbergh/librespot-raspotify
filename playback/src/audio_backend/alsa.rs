@@ -435,25 +435,47 @@ impl AlsaSink {
 
             loop {
                 // Try to make sure the whole buffer is actually written.
-                match io_bytes.writei(&self.period_buffer[start_index..]) {
-                    Ok(num_frames_written) => {
-                        start_index += pcm.frames_to_bytes(num_frames_written as Frames) as usize;
 
-                        if start_index == buffer_len {
-                            break;
+                // Check to see how much space in the device's hardware buffer.
+                let space_in_hardware_buffer = pcm.avail().map_err(AlsaError::OnWrite)?;
+
+                if space_in_hardware_buffer == 0 {
+                    // If there is no space wait until there is.
+                    // This prevents the loop from spinning it's
+                    // wheels and eating CPU cycles.
+                    pcm.wait(None).map_err(AlsaError::OnWrite)?;
+                } else {
+                    let end_index = (start_index
+                        + pcm.frames_to_bytes(space_in_hardware_buffer) as usize)
+                        .min(buffer_len);
+
+                    match io_bytes.writei(&self.period_buffer[start_index..end_index]) {
+                        Ok(num_frames_written) => {
+                            start_index +=
+                                pcm.frames_to_bytes(num_frames_written as Frames) as usize;
+
+                            if start_index == buffer_len {
+                                break;
+                            }
                         }
-                    }
-                    Err(e) => {
-                        // Capture and log the original error as a warning, and then try to recover.
-                        // If recovery fails then forward that error back to player.
-                        warn!("Error writing from AlsaSink buffer to PCM, trying to recover, {e}");
+                        Err(e) => {
+                            // Capture and log the original error as a warning, and then try to recover.
+                            // If recovery fails then forward that error back to player.
+                            warn!(
+                                "Error writing from AlsaSink buffer to PCM, trying to recover, {e}"
+                            );
 
-                        pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
-                        // Don't retry writing the buffer even if recovery is successful
-                        // because we have no way of knowing how much if any of it was actually written.
-                        // So just drop it.
-                        warn!("Dropping remaining AlsaSink buffer");
-                        break;
+                            pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
+
+                            // We have no way of knowing at this point how much if
+                            // any of the buffer chunk was actually written so we just
+                            // skip what we just attempted to write.
+                            start_index = end_index;
+
+                            if start_index == buffer_len {
+                                break;
+                            }
+                        }
                     }
                 }
             }
