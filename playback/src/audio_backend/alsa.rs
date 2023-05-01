@@ -449,10 +449,23 @@ impl AlsaSink {
                         + pcm.frames_to_bytes(space_in_hardware_buffer) as usize)
                         .min(buffer_len);
 
+                    let num_bytes_to_write = end_index - start_index;
+
                     match io_bytes.writei(&self.period_buffer[start_index..end_index]) {
                         Ok(num_frames_written) => {
-                            start_index +=
+                            let num_bytes_written =
                                 pcm.frames_to_bytes(num_frames_written as Frames) as usize;
+
+                            // The docs are bit confusing as they say:
+                            // "The returned number of frames can be less only if a signal or underrun occurred."
+                            // But an underrun is a possible error that can be returned also?
+                            if num_bytes_written < num_bytes_to_write {
+                                warn!(
+                                    "Error writing from AlsaSink buffer to PCM, a signal or buffer underrun has occurred"
+                                );
+                            }
+
+                            start_index = (start_index + num_bytes_written).min(buffer_len);
 
                             if start_index == buffer_len {
                                 break;
