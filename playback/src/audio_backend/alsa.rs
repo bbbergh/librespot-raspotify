@@ -429,68 +429,12 @@ impl AlsaSink {
 
     fn write_buf(&mut self) -> SinkResult<()> {
         if let Some(pcm) = self.pcm.as_mut() {
-            let mut start_index = 0;
-            let buffer_len = self.period_buffer.len();
-            let io_bytes = pcm.io_bytes();
+            if let Err(e) = pcm.io_bytes().writei(&self.period_buffer) {
+                // Capture and log the original error as a warning, and then try to recover.
+                // If recovery fails then forward that error back to player.
+                warn!("Error writing from AlsaSink buffer to PCM, trying to recover, {e}");
 
-            loop {
-                // Try to make sure the whole buffer is actually written.
-
-                // Check to see how much space in the device's hardware buffer.
-                let space_in_hardware_buffer = pcm.avail().map_err(AlsaError::OnWrite)?;
-
-                if space_in_hardware_buffer == 0 {
-                    // If there is no space wait until there is.
-                    // This prevents the loop from spinning it's
-                    // wheels and eating CPU cycles.
-                    pcm.wait(None).map_err(AlsaError::OnWrite)?;
-                } else {
-                    let end_index = (start_index
-                        + pcm.frames_to_bytes(space_in_hardware_buffer) as usize)
-                        .min(buffer_len);
-
-                    let num_bytes_to_write = end_index - start_index;
-
-                    match io_bytes.writei(&self.period_buffer[start_index..end_index]) {
-                        Ok(num_frames_written) => {
-                            let num_bytes_written =
-                                pcm.frames_to_bytes(num_frames_written as Frames) as usize;
-
-                            // The docs are bit confusing as they say:
-                            // "The returned number of frames can be less only if a signal or underrun occurred."
-                            // But an underrun is a possible error that can be returned also?
-                            if num_bytes_written < num_bytes_to_write {
-                                warn!(
-                                    "Error writing from AlsaSink buffer to PCM, a signal or buffer underrun has occurred"
-                                );
-                            }
-
-                            start_index = (start_index + num_bytes_written).min(buffer_len);
-
-                            if start_index == buffer_len {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            // Capture and log the original error as a warning, and then try to recover.
-                            // If recovery fails then forward that error back to player.
-                            warn!(
-                                "Error writing from AlsaSink buffer to PCM, trying to recover, {e}"
-                            );
-
-                            pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
-
-                            // We have no way of knowing at this point how much if
-                            // any of the buffer chunk was actually written so we just
-                            // skip what we just attempted to write.
-                            start_index = end_index;
-
-                            if start_index == buffer_len {
-                                break;
-                            }
-                        }
-                    }
-                }
+                pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
             }
         }
 
