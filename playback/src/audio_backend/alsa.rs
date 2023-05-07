@@ -258,35 +258,37 @@ impl AlsaSink {
     pub const NAME: &'static str = "alsa";
 
     fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
-        let period_size = {
-            let period_size = hwp
-                .set_period_size_near(OPTIMAL_PERIOD_SIZE, ValueOr::Nearest)
-                .unwrap_or_default();
-
-            if period_size > 0 {
-                trace!(
-                    "Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD_SIZE}): {period_size}"
-                );
-            } else {
-                trace!("Error getting Period Size, falling back to the device's defaults");
+        let period_size = match hwp.set_period_size_near(OPTIMAL_PERIOD_SIZE, ValueOr::Nearest) {
+            Ok(period_size) => {
+                if period_size > 0 {
+                    trace!("Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD_SIZE}): {period_size}");
+                    period_size
+                } else {
+                    trace!("Error getting Period Size, Period Size must be greater than 0, falling back to the device's default Buffer parameters");
+                    0
+                }
             }
-
-            period_size
+            Err(e) => {
+                trace!("Error getting Period Size: {e}, falling back to the device's default Buffer parameters");
+                0
+            }
         };
 
         if period_size > 0 {
-            let buffer_size = {
-                let buffer_size = hwp
-                    .set_buffer_size_near(
-                        (period_size * OPTIMAL_NUM_PERIODS).max(OPTIMAL_BUFFER_SIZE),
-                    )
-                    .unwrap_or_default();
-
-                if buffer_size >= period_size * MIN_NUM_PERIODS {
-                    trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER_SIZE}): {buffer_size}");
-                    buffer_size
-                } else {
-                    trace!("Error getting Buffer Size, falling back to the device's defaults");
+            let buffer_size = match hwp
+                .set_buffer_size_near((period_size * OPTIMAL_NUM_PERIODS).max(OPTIMAL_BUFFER_SIZE))
+            {
+                Ok(buffer_size) => {
+                    if buffer_size >= period_size * MIN_NUM_PERIODS {
+                        trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER_SIZE}): {buffer_size}");
+                        buffer_size
+                    } else {
+                        trace!("Error getting Buffer Size, Buffer Size must be at least {period_size} * {MIN_NUM_PERIODS}, falling back to the device's default Buffer parameters");
+                        0
+                    }
+                }
+                Err(e) => {
+                    trace!("Error getting Buffer Size: {e}, falling back to the device's default Buffer parameters");
                     0
                 }
             };
@@ -396,7 +398,7 @@ impl AlsaSink {
                 trace!("A Buffer Size of {buffer_size} Frames is Suboptimal");
 
                 if buffer_size < OPTIMAL_BUFFER_SIZE {
-                    trace!("A smaller than necessary Buffer Size can lead to underruns (audio glitches) and high CPU usage.");
+                    trace!("A smaller than necessary Buffer Size can lead to Buffer underruns (audio glitches) and high CPU usage.");
                 } else {
                     trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");
                 }
@@ -410,7 +412,7 @@ impl AlsaSink {
                 if period_size < optimal_period_size {
                     trace!("A smaller than necessary Period Size relative to Buffer Size can lead to high CPU usage.");
                 } else {
-                    trace!("A larger than necessary Period Size relative to Buffer Size can lessen underrun (audio glitch) protection.");
+                    trace!("A larger than necessary Period Size relative to Buffer Size can lessen Buffer underrun (audio glitch) protection.");
                 }
             }
 
@@ -432,7 +434,7 @@ impl AlsaSink {
             if let Err(e) = pcm.io_bytes().writei(&self.period_buffer) {
                 // Capture and log the original error as a warning, and then try to recover.
                 // If recovery fails then forward that error back to player.
-                warn!("Error writing from AlsaSink buffer to PCM, trying to recover, {e}");
+                warn!("Error writing from AlsaSink Buffer to PCM, trying to recover, {e}");
 
                 pcm.try_recover(e, false).map_err(AlsaError::OnWrite)?;
             }
