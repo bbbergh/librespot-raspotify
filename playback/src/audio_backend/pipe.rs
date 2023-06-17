@@ -42,7 +42,7 @@ pub struct StdoutSink {
 }
 
 impl Open for StdoutSink {
-    fn open(file: Option<String>, format: AudioFormat) -> Self {
+    fn open(file: Option<String>, format: AudioFormat, _: u32) -> Self {
         if let Some("?") = file.as_deref() {
             println!("\nUsage:\n\nOutput to stdout:\n\n\t--backend pipe\n\nOutput to file:\n\n\t--backend pipe --device {{filename}}\n");
             exit(0);

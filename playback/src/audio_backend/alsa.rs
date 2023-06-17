@@ -2,15 +2,13 @@ use super::{Open, Sink, SinkAsBytes, SinkError, SinkResult};
 use crate::config::AudioFormat;
 use crate::convert::Converter;
 use crate::decoder::AudioPacket;
-use crate::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::NUM_CHANNELS;
 use alsa::device_name::HintIter;
 use alsa::pcm::{Access, Format, Frames, HwParams, PCM};
 use alsa::{Direction, ValueOr};
 use std::process::exit;
 use thiserror::Error;
 
-const OPTIMAL_BUFFER_SIZE: Frames = SAMPLE_RATE as Frames / 2;
-const OPTIMAL_PERIOD_SIZE: Frames = SAMPLE_RATE as Frames / 10;
 const OPTIMAL_NUM_PERIODS: Frames = 5;
 const MIN_NUM_PERIODS: Frames = 2;
 
@@ -109,6 +107,7 @@ impl From<AudioFormat> for Format {
 pub struct AlsaSink {
     pcm: Option<PCM>,
     format: AudioFormat,
+    sample_rate: u32,
     device: String,
     period_buffer: Vec<u8>,
 }
@@ -131,7 +130,7 @@ fn list_compatible_devices() -> SinkResult<()> {
                             // 2 ch 44.1 Interleaved.
 
                             if hwp.set_access(Access::RWInterleaved).is_ok()
-                                && hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).is_ok()
+                                && hwp.set_rate(44100, ValueOr::Nearest).is_ok()
                                 && hwp.set_channels(NUM_CHANNELS as u32).is_ok()
                             {
                                 let supported_formats: Vec<String> = FORMATS
@@ -174,7 +173,7 @@ fn list_compatible_devices() -> SinkResult<()> {
 }
 
 impl Open for AlsaSink {
-    fn open(device: Option<String>, format: AudioFormat) -> Self {
+    fn open(device: Option<String>, format: AudioFormat, sample_rate: u32) -> Self {
         let name = match device.as_deref() {
             Some("?") => match list_compatible_devices() {
                 Ok(_) => {
@@ -190,11 +189,12 @@ impl Open for AlsaSink {
         }
         .to_string();
 
-        info!("Using AlsaSink with format: {format:?}");
+        info!("Using AlsaSink with format: {format:?}, sample rate: {sample_rate}");
 
         Self {
             pcm: None,
             format,
+            sample_rate,
             device: name,
             period_buffer: vec![],
         }
@@ -257,11 +257,15 @@ impl SinkAsBytes for AlsaSink {
 impl AlsaSink {
     pub const NAME: &'static str = "alsa";
 
-    fn set_period_and_buffer_size(hwp: &HwParams) -> bool {
-        let period_size = match hwp.set_period_size_near(OPTIMAL_PERIOD_SIZE, ValueOr::Nearest) {
+    fn set_period_and_buffer_size(
+        hwp: &HwParams,
+        optimal_buffer_size: Frames,
+        optimal_period_size: Frames,
+    ) -> bool {
+        let period_size = match hwp.set_period_size_near(optimal_period_size, ValueOr::Nearest) {
             Ok(period_size) => {
                 if period_size > 0 {
-                    trace!("Closest Supported Period Size to Optimal ({OPTIMAL_PERIOD_SIZE}): {period_size}");
+                    trace!("Closest Supported Period Size to Optimal ({optimal_period_size}): {period_size}");
                     period_size
                 } else {
                     trace!("Error getting Period Size, Period Size must be greater than 0, falling back to the device's default Buffer parameters");
@@ -276,11 +280,11 @@ impl AlsaSink {
 
         if period_size > 0 {
             let buffer_size = match hwp
-                .set_buffer_size_near((period_size * OPTIMAL_NUM_PERIODS).max(OPTIMAL_BUFFER_SIZE))
+                .set_buffer_size_near((period_size * OPTIMAL_NUM_PERIODS).max(optimal_buffer_size))
             {
                 Ok(buffer_size) => {
                     if buffer_size >= period_size * MIN_NUM_PERIODS {
-                        trace!("Closest Supported Buffer Size to Optimal ({OPTIMAL_BUFFER_SIZE}): {buffer_size}");
+                        trace!("Closest Supported Buffer Size to Optimal ({optimal_buffer_size}): {buffer_size}");
                         buffer_size
                     } else {
                         trace!("Error getting Buffer Size, Buffer Size must be at least {period_size} * {MIN_NUM_PERIODS}, falling back to the device's default Buffer parameters");
@@ -300,6 +304,9 @@ impl AlsaSink {
     }
 
     fn open_device(&mut self) -> SinkResult<()> {
+        let optimal_buffer_size: Frames = self.sample_rate as Frames / 2;
+        let optimal_period_size: Frames = self.sample_rate as Frames / 10;
+
         let pcm = PCM::new(&self.device, Direction::Playback, false).map_err(|e| {
             AlsaError::PcmSetUp {
                 device: self.device.clone(),
@@ -340,19 +347,20 @@ impl AlsaSink {
                 }
             })?;
 
-            hwp.set_rate(SAMPLE_RATE, ValueOr::Nearest).map_err(|e| {
-                let supported_rates = (hwp.get_rate_min().unwrap_or_default()
-                    ..=hwp.get_rate_max().unwrap_or_default())
-                    .filter(|r| COMMON_SAMPLE_RATES.contains(r) && hwp.test_rate(*r).is_ok())
-                    .collect();
+            hwp.set_rate(self.sample_rate, ValueOr::Nearest)
+                .map_err(|e| {
+                    let supported_rates = (hwp.get_rate_min().unwrap_or_default()
+                        ..=hwp.get_rate_max().unwrap_or_default())
+                        .filter(|r| COMMON_SAMPLE_RATES.contains(r) && hwp.test_rate(*r).is_ok())
+                        .collect();
 
-                AlsaError::UnsupportedSampleRate {
-                    device: self.device.clone(),
-                    samplerate: SAMPLE_RATE,
-                    supported_rates,
-                    e,
-                }
-            })?;
+                    AlsaError::UnsupportedSampleRate {
+                        device: self.device.clone(),
+                        samplerate: self.sample_rate,
+                        supported_rates,
+                        e,
+                    }
+                })?;
 
             hwp.set_channels(NUM_CHANNELS as u32).map_err(|e| {
                 let supported_channel_counts = (hwp.get_channels_min().unwrap_or_default()
@@ -374,7 +382,11 @@ impl AlsaSink {
             // hwp continuity is very important.
             let hwp_clone = hwp.clone();
 
-            if Self::set_period_and_buffer_size(&hwp_clone) {
+            if Self::set_period_and_buffer_size(
+                &hwp_clone,
+                optimal_buffer_size,
+                optimal_period_size,
+            ) {
                 pcm.hw_params(&hwp_clone).map_err(AlsaError::Pcm)?;
             } else {
                 pcm.hw_params(&hwp).map_err(AlsaError::Pcm)?;
@@ -394,10 +406,10 @@ impl AlsaSink {
 
             pcm.sw_params(&swp).map_err(AlsaError::Pcm)?;
 
-            if buffer_size != OPTIMAL_BUFFER_SIZE {
+            if buffer_size != optimal_buffer_size {
                 trace!("A Buffer Size of {buffer_size} Frames is Suboptimal");
 
-                if buffer_size < OPTIMAL_BUFFER_SIZE {
+                if buffer_size < optimal_buffer_size {
                     trace!("A smaller than necessary Buffer Size can lead to Buffer underruns (audio glitches) and high CPU usage.");
                 } else {
                     trace!("A larger than necessary Buffer Size can lead to perceivable latency (lag).");

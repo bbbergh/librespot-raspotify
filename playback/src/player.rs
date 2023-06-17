@@ -27,8 +27,9 @@ use crate::core::util::SeqGenerator;
 use crate::decoder::{AudioDecoder, AudioPacket, DecoderError, PassthroughDecoder, VorbisDecoder};
 use crate::metadata::{AudioItem, FileFormat};
 use crate::mixer::VolumeGetter;
+use crate::resampler::StereoInterleavedResampler;
 
-use crate::{MS_PER_PAGE, NUM_CHANNELS, PAGES_PER_MS, SAMPLES_PER_SECOND};
+use crate::{MS_PER_PAGE, NUM_CHANNELS, PAGES_PER_MS};
 
 const PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS: u32 = 30000;
 pub const DB_VOLTAGE_RATIO: f64 = 20.0;
@@ -61,6 +62,7 @@ struct PlayerInternal {
     sink_event_callback: Option<SinkEventCallback>,
     volume_getter: Box<dyn VolumeGetter + Send>,
     normaliser: Normaliser,
+    resampler: StereoInterleavedResampler,
     event_senders: Vec<mpsc::UnboundedSender<PlayerEvent>>,
     converter: Converter,
 
@@ -204,14 +206,6 @@ pub fn ratio_to_db(ratio: f64) -> f64 {
     ratio.log10() * DB_VOLTAGE_RATIO
 }
 
-pub fn duration_to_coefficient(duration: Duration) -> f64 {
-    f64::exp(-1.0 / (duration.as_secs_f64() * SAMPLES_PER_SECOND as f64))
-}
-
-pub fn coefficient_to_duration(coefficient: f64) -> Duration {
-    Duration::from_secs_f64(-1.0 / f64::ln(coefficient) / SAMPLES_PER_SECOND as f64)
-}
-
 struct DynamicNormalisation {
     threshold_db: f64,
     attack_cf: f64,
@@ -325,11 +319,20 @@ impl Normaliser {
                 // as_millis() has rounding errors (truncates)
                 debug!(
                     "Normalisation Attack: {:.0} ms",
-                    coefficient_to_duration(config.normalisation_attack_cf).as_secs_f64() * 1000.
+                    config
+                        .sample_rate
+                        .normalisation_coefficient_to_duration(config.normalisation_attack_cf)
+                        .as_secs_f64()
+                        * 1000.
                 );
+
                 debug!(
                     "Normalisation Release: {:.0} ms",
-                    coefficient_to_duration(config.normalisation_release_cf).as_secs_f64() * 1000.
+                    config
+                        .sample_rate
+                        .normalisation_coefficient_to_duration(config.normalisation_release_cf)
+                        .as_secs_f64()
+                        * 1000.
                 );
 
                 Normaliser::Dynamic(DynamicNormalisation {
@@ -514,6 +517,9 @@ impl Player {
 
         let normaliser = Normaliser::new(&config);
 
+        let resampler =
+            StereoInterleavedResampler::new(config.sample_rate, config.interpolation_quality);
+
         let handle = thread::spawn(move || {
             debug!("new Player[{}]", session.session_id());
 
@@ -531,6 +537,7 @@ impl Player {
                 sink_event_callback: None,
                 volume_getter,
                 normaliser,
+                resampler,
                 event_senders: [event_sender].to_vec(),
                 converter,
 
@@ -1348,6 +1355,7 @@ impl PlayerInternal {
     }
 
     fn ensure_sink_stopped(&mut self, temporarily: bool) {
+        self.resampler.stop();
         match self.sink_status {
             SinkStatus::Running => {
                 trace!("== Stopping sink ==");
@@ -1469,20 +1477,24 @@ impl PlayerInternal {
 
     fn handle_packet(&mut self, packet: Option<AudioPacket>, normalisation_factor: f64) {
         match packet {
-            Some(mut packet) => {
+            Some(packet) => {
                 if !packet.is_empty() {
-                    if let AudioPacket::Samples(ref mut data) = packet {
-                        // Get the volume for the packet.
-                        // In the case of hardware volume control this will
-                        // always be 1.0 (no change).
-                        let volume = self.volume_getter.attenuation_factor();
+                    if let AudioPacket::Samples(sample) = packet {
+                        if let Some(samples) = self.resampler.process(&sample) {
+                            let volume = self.volume_getter.attenuation_factor();
 
-                        *data = self
-                            .normaliser
-                            .normalise(data, volume, normalisation_factor);
-                    }
+                            let samples =
+                                self.normaliser
+                                    .normalise(&samples, volume, normalisation_factor);
 
-                    if let Err(e) = self.sink.write(packet, &mut self.converter) {
+                            let packet = AudioPacket::Samples(samples);
+
+                            if let Err(e) = self.sink.write(packet, &mut self.converter) {
+                                error!("{}", e);
+                                exit(1);
+                            }
+                        }
+                    } else if let Err(e) = self.sink.write(packet, &mut self.converter) {
                         error!("{}", e);
                         exit(1);
                     }

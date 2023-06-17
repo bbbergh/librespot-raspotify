@@ -1,11 +1,15 @@
 use std::{mem, str::FromStr, time::Duration};
 
 pub use crate::dither::{mk_ditherer, DithererBuilder, TriangularDitherer};
-use crate::{convert::i24, player::duration_to_coefficient};
+use crate::{
+    convert::i24,
+    resampler::{InterpolationQuality, SampleRate},
+};
 
-#[derive(Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Bitrate {
     Bitrate96,
+    #[default]
     Bitrate160,
     Bitrate320,
 }
@@ -22,19 +26,14 @@ impl FromStr for Bitrate {
     }
 }
 
-impl Default for Bitrate {
-    fn default() -> Self {
-        Self::Bitrate160
-    }
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub enum AudioFormat {
     F64,
     F32,
     S32,
     S24,
     S24_3,
+    #[default]
     S16,
 }
 
@@ -53,12 +52,6 @@ impl FromStr for AudioFormat {
     }
 }
 
-impl Default for AudioFormat {
-    fn default() -> Self {
-        Self::S16
-    }
-}
-
 impl AudioFormat {
     // not used by all backends
     #[allow(dead_code)]
@@ -73,10 +66,11 @@ impl AudioFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NormalisationType {
     Album,
     Track,
+    #[default]
     Auto,
 }
 
@@ -92,15 +86,10 @@ impl FromStr for NormalisationType {
     }
 }
 
-impl Default for NormalisationType {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NormalisationMethod {
     Basic,
+    #[default]
     Dynamic,
 }
 
@@ -115,17 +104,14 @@ impl FromStr for NormalisationMethod {
     }
 }
 
-impl Default for NormalisationMethod {
-    fn default() -> Self {
-        Self::Dynamic
-    }
-}
-
 #[derive(Clone)]
 pub struct PlayerConfig {
     pub bitrate: Bitrate,
     pub gapless: bool,
     pub passthrough: bool,
+
+    pub interpolation_quality: InterpolationQuality,
+    pub sample_rate: SampleRate,
 
     pub normalisation: bool,
     pub normalisation_type: NormalisationType,
@@ -147,12 +133,16 @@ impl Default for PlayerConfig {
             bitrate: Bitrate::default(),
             gapless: true,
             normalisation: false,
+            interpolation_quality: InterpolationQuality::default(),
+            sample_rate: SampleRate::default(),
             normalisation_type: NormalisationType::default(),
             normalisation_method: NormalisationMethod::default(),
             normalisation_pregain_db: 0.0,
             normalisation_threshold_dbfs: -2.0,
-            normalisation_attack_cf: duration_to_coefficient(Duration::from_millis(5)),
-            normalisation_release_cf: duration_to_coefficient(Duration::from_millis(100)),
+            normalisation_attack_cf: SampleRate::default()
+                .duration_to_normalisation_coefficient(Duration::from_millis(5)),
+            normalisation_release_cf: SampleRate::default()
+                .duration_to_normalisation_coefficient(Duration::from_millis(100)),
             normalisation_knee_db: 5.0,
             passthrough: false,
             ditherer: Some(mk_ditherer::<TriangularDitherer>),

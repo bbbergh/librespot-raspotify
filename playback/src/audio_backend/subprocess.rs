@@ -66,7 +66,7 @@ pub struct SubprocessSink {
 }
 
 impl Open for SubprocessSink {
-    fn open(shell_command: Option<String>, format: AudioFormat) -> Self {
+    fn open(shell_command: Option<String>, format: AudioFormat, _: u32) -> Self {
         if let Some("?") = shell_command.as_deref() {
             println!("\nUsage:\n\nOutput to a Subprocess:\n\n\t--backend subprocess --device {{shell_command}}\n");
             exit(0);

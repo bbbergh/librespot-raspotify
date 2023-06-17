@@ -20,7 +20,8 @@ use librespot::playback::dither;
 #[cfg(feature = "alsa-backend")]
 use librespot::playback::mixer::alsamixer::AlsaMixer;
 use librespot::playback::mixer::{self, MixerConfig, MixerFn};
-use librespot::playback::player::{coefficient_to_duration, duration_to_coefficient, Player};
+use librespot::playback::player::Player;
+use librespot::playback::resampler::{InterpolationQuality, SampleRate};
 
 mod player_event_handler;
 use player_event_handler::{emit_sink_event, run_program_on_events};
@@ -233,6 +234,8 @@ fn get_setup() -> Setup {
     const VOLUME_RANGE: &str = "volume-range";
     const ZEROCONF_PORT: &str = "zeroconf-port";
     const ZEROCONF_INTERFACE: &str = "zeroconf-interface";
+    const INTERPOLATION_QUALITY: &str = "interpolation-quality";
+    const SAMPLE_RATE: &str = "sample-rate";
 
     // Mostly arbitrary.
     const AUTOPLAY_SHORT: &str = "A";
@@ -566,6 +569,16 @@ fn get_setup() -> Setup {
         ZEROCONF_INTERFACE,
         "Comma-separated interface IP addresses on which zeroconf will bind. Defaults to all interfaces. Ignored by DNS-SD.",
         "IP"
+    ).optopt(
+        "",
+        INTERPOLATION_QUALITY,
+        "Interpolation Quality to use if Resampling {Low|Medium|High}. Defaults to Low.",
+        "QUALITY"
+    ).optopt(
+        "",
+        SAMPLE_RATE,
+        "Sample Rate to Resample to {44.1kHz|48kHz|88.2kHz|96kHz}. Defaults to 44.1kHz meaning no resampling.",
+        "SAMPLERATE"
     );
 
     let args: Vec<_> = std::env::args_os()
@@ -715,10 +728,18 @@ fn get_setup() -> Setup {
 
     let invalid_error_msg =
         |long: &str, short: &str, invalid: &str, valid_values: &str, default_value: &str| {
-            error!("Invalid `--{}` / `-{}`: \"{}\"", long, short, invalid);
+            if short.is_empty() {
+                error!("Invalid `--{long}`: \"{invalid}\"");
+            } else {
+                error!("Invalid `--{long}` / `-{short}`: \"{invalid}\"");
+            }
 
             if !valid_values.is_empty() {
-                println!("Valid `--{long}` / `-{short}` values: {valid_values}");
+                if short.is_empty() {
+                    println!("Valid `--{long}` values: {valid_values}");
+                } else {
+                    println!("Valid `--{long}` / `-{short}` values: {valid_values}");
+                }
             }
 
             if !default_value.is_empty() {
@@ -744,6 +765,42 @@ fn get_setup() -> Setup {
         exit(1);
     });
 
+    let interpolation_quality = opt_str(INTERPOLATION_QUALITY)
+        .as_deref()
+        .map(|interpolation_quality| {
+            InterpolationQuality::from_str(interpolation_quality).unwrap_or_else(|_| {
+                let default_value = &format!("{:?}", InterpolationQuality::default());
+                invalid_error_msg(
+                    INTERPOLATION_QUALITY,
+                    "",
+                    interpolation_quality,
+                    "Low, Medium, High",
+                    default_value,
+                );
+
+                exit(1);
+            })
+        })
+        .unwrap_or_default();
+
+    let sample_rate = opt_str(SAMPLE_RATE)
+        .as_deref()
+        .map(|sample_rate| {
+            SampleRate::from_str(sample_rate).unwrap_or_else(|_| {
+                let default_value = &format!("{:?}", SampleRate::default());
+                invalid_error_msg(
+                    SAMPLE_RATE,
+                    "",
+                    sample_rate,
+                    "44.1kHz, 48kHz, 88.2kHz, 96kHz",
+                    default_value,
+                );
+
+                exit(1);
+            })
+        })
+        .unwrap_or_default();
+
     let format = opt_str(FORMAT)
         .as_deref()
         .map(|format| {
@@ -765,7 +822,7 @@ fn get_setup() -> Setup {
     let device = opt_str(DEVICE);
     if let Some(ref value) = device {
         if value == "?" {
-            backend(device, format);
+            backend(device, format, sample_rate.as_u32());
             exit(0);
         } else if value.is_empty() {
             empty_string_error_msg(DEVICE, DEVICE_SHORT);
@@ -1450,9 +1507,8 @@ fn get_setup() -> Setup {
 
             normalisation_attack_cf = opt_str(NORMALISATION_ATTACK)
                 .map(|attack| match attack.parse::<u64>() {
-                    Ok(value) if (VALID_NORMALISATION_ATTACK_RANGE).contains(&value) => {
-                        duration_to_coefficient(Duration::from_millis(value))
-                    }
+                    Ok(value) if (VALID_NORMALISATION_ATTACK_RANGE).contains(&value) => sample_rate
+                        .duration_to_normalisation_coefficient(Duration::from_millis(value)),
                     _ => {
                         let valid_values = &format!(
                             "{} - {}",
@@ -1465,7 +1521,10 @@ fn get_setup() -> Setup {
                             NORMALISATION_ATTACK_SHORT,
                             &attack,
                             valid_values,
-                            &coefficient_to_duration(player_default_config.normalisation_attack_cf)
+                            &sample_rate
+                                .normalisation_coefficient_to_duration(
+                                    player_default_config.normalisation_attack_cf,
+                                )
                                 .as_millis()
                                 .to_string(),
                         );
@@ -1478,7 +1537,8 @@ fn get_setup() -> Setup {
             normalisation_release_cf = opt_str(NORMALISATION_RELEASE)
                 .map(|release| match release.parse::<u64>() {
                     Ok(value) if (VALID_NORMALISATION_RELEASE_RANGE).contains(&value) => {
-                        duration_to_coefficient(Duration::from_millis(value))
+                        sample_rate
+                            .duration_to_normalisation_coefficient(Duration::from_millis(value))
                     }
                     _ => {
                         let valid_values = &format!(
@@ -1492,11 +1552,12 @@ fn get_setup() -> Setup {
                             NORMALISATION_RELEASE_SHORT,
                             &release,
                             valid_values,
-                            &coefficient_to_duration(
-                                player_default_config.normalisation_release_cf,
-                            )
-                            .as_millis()
-                            .to_string(),
+                            &sample_rate
+                                .normalisation_coefficient_to_duration(
+                                    player_default_config.normalisation_release_cf,
+                                )
+                                .as_millis()
+                                .to_string(),
                         );
 
                         exit(1);
@@ -1564,6 +1625,8 @@ fn get_setup() -> Setup {
             bitrate,
             gapless,
             passthrough,
+            interpolation_quality,
+            sample_rate,
             normalisation,
             normalisation_type,
             normalisation_method,
@@ -1727,9 +1790,10 @@ async fn main() {
                     let format = setup.format;
                     let backend = setup.backend;
                     let device = setup.device.clone();
+                    let sample_rate = player_config.sample_rate.as_u32();
                     let (player, event_channel) =
                         Player::new(player_config, session.clone(), soft_volume, move || {
-                            (backend)(device, format)
+                            (backend)(device, format, sample_rate)
                         });
 
                     if setup.emit_sink_events {

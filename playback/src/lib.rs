@@ -12,6 +12,7 @@ pub mod decoder;
 pub mod dither;
 pub mod mixer;
 pub mod player;
+pub mod resampler;
 
 pub const SAMPLE_RATE: u32 = 44100;
 pub const NUM_CHANNELS: u8 = 2;

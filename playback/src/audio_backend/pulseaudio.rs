@@ -2,7 +2,7 @@ use super::{Open, Sink, SinkAsBytes, SinkError, SinkResult};
 use crate::config::AudioFormat;
 use crate::convert::Converter;
 use crate::decoder::AudioPacket;
-use crate::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::NUM_CHANNELS;
 use libpulse_binding::{self as pulse, error::PAErr, stream::Direction};
 use libpulse_simple_binding::Simple;
 use std::env;
@@ -59,11 +59,12 @@ pub struct PulseAudioSink {
     app_name: String,
     stream_desc: String,
     format: AudioFormat,
+    sample_rate: u32,
     sample_spec: pulse::sample::Spec,
 }
 
 impl Open for PulseAudioSink {
-    fn open(device: Option<String>, format: AudioFormat) -> Self {
+    fn open(device: Option<String>, format: AudioFormat, sample_rate: u32) -> Self {
         let app_name = env::var("PULSE_PROP_application.name").unwrap_or_default();
         let stream_desc = env::var("PULSE_PROP_stream.description").unwrap_or_default();
 
@@ -74,12 +75,12 @@ impl Open for PulseAudioSink {
             format
         };
 
-        info!("Using PulseAudioSink with format: {format:?}");
+        info!("Using PulseAudioSink with format: {format:?}, sample rate: {sample_rate}");
 
         let sample_spec = pulse::sample::Spec {
             format: format.into(),
             channels: NUM_CHANNELS,
-            rate: SAMPLE_RATE,
+            rate: sample_rate,
         };
 
         Self {
@@ -88,6 +89,7 @@ impl Open for PulseAudioSink {
             app_name,
             stream_desc,
             format,
+            sample_rate,
             sample_spec,
         }
     }
@@ -101,7 +103,7 @@ impl Sink for PulseAudioSink {
                     pulse_format: self.sample_spec.format,
                     format: self.format,
                     channels: NUM_CHANNELS,
-                    rate: SAMPLE_RATE,
+                    rate: self.sample_rate,
                 };
 
                 return Err(pulse_error.into());

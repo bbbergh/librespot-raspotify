@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::mem;
+
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -167,7 +167,7 @@ impl MercuryManager {
 
         for i in 0..count {
             let mut part = Self::parse_part(&mut data);
-            if let Some(mut partial) = mem::replace(&mut pending.partial, None) {
+            if let Some(mut partial) = pending.partial.take() {
                 partial.extend_from_slice(&part);
                 part = partial;
             }
