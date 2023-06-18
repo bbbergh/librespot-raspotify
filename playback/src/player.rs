@@ -19,7 +19,7 @@ use crate::audio::{
     READ_AHEAD_DURING_PLAYBACK_ROUNDTRIPS,
 };
 use crate::audio_backend::Sink;
-use crate::config::{Bitrate, NormalisationType, PlayerConfig};
+use crate::config::{Bitrate, PlayerConfig};
 use crate::convert::Converter;
 use crate::core::session::Session;
 use crate::core::spotify_id::SpotifyId;
@@ -1258,17 +1258,10 @@ impl PlayerInternal {
     ) {
         let position_ms = Self::position_pcm_to_ms(loaded_track.stream_position_pcm);
 
-        let mut config = self.config.clone();
-        if config.normalisation_type == NormalisationType::Auto {
-            if self.auto_normalise_as_album {
-                config.normalisation_type = NormalisationType::Album;
-            } else {
-                config.normalisation_type = NormalisationType::Track;
-            }
-        };
-
-        self.sample_pipeline
-            .set_normalisation_factor(&config, loaded_track.normalisation_data);
+        self.sample_pipeline.set_normalisation_factor(
+            self.auto_normalise_as_album,
+            loaded_track.normalisation_data,
+        );
 
         if start_playback {
             self.ensure_sink_running();

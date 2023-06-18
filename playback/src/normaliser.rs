@@ -6,23 +6,10 @@ use crate::{
     ratio_to_db, PCM_AT_0DBFS,
 };
 
-trait Normalisation: Send {
-    fn new(config: &PlayerConfig) -> Self
-    where
-        Self: Sized;
-
-    fn stop(&mut self) {}
-    fn normalise(&mut self, samples: &[f64], volume: f64, factor: f64) -> Vec<f64>;
-}
-
 struct NoNormalisation;
 
-impl Normalisation for NoNormalisation {
-    fn new(_: &PlayerConfig) -> Self {
-        Self
-    }
-
-    fn normalise(&mut self, samples: &[f64], volume: f64, _: f64) -> Vec<f64> {
+impl NoNormalisation {
+    fn normalise(samples: &[f64], volume: f64) -> Vec<f64> {
         if volume < 1.0 {
             let mut output = Vec::with_capacity(samples.len());
 
@@ -37,23 +24,8 @@ impl Normalisation for NoNormalisation {
 
 struct BasicNormalisation;
 
-impl Normalisation for BasicNormalisation {
-    fn new(config: &PlayerConfig) -> Self {
-        debug!("Normalisation Type: {:?}", config.normalisation_type);
-        debug!(
-            "Normalisation Pregain: {:.1} dB",
-            config.normalisation_pregain_db
-        );
-        debug!(
-            "Normalisation Threshold: {:.1} dBFS",
-            config.normalisation_threshold_dbfs
-        );
-        debug!("Normalisation Method: {:?}", config.normalisation_method);
-
-        Self
-    }
-
-    fn normalise(&mut self, samples: &[f64], volume: f64, factor: f64) -> Vec<f64> {
+impl BasicNormalisation {
+    fn normalise(samples: &[f64], volume: f64, factor: f64) -> Vec<f64> {
         if volume < 1.0 || factor < 1.0 {
             let mut output = Vec::with_capacity(samples.len());
 
@@ -66,6 +38,7 @@ impl Normalisation for BasicNormalisation {
     }
 }
 
+#[derive(PartialEq)]
 struct DynamicNormalisation {
     threshold_db: f64,
     attack_cf: f64,
@@ -75,19 +48,8 @@ struct DynamicNormalisation {
     peak: f64,
 }
 
-impl Normalisation for DynamicNormalisation {
+impl DynamicNormalisation {
     fn new(config: &PlayerConfig) -> Self {
-        debug!("Normalisation Type: {:?}", config.normalisation_type);
-        debug!(
-            "Normalisation Pregain: {:.1} dB",
-            config.normalisation_pregain_db
-        );
-        debug!(
-            "Normalisation Threshold: {:.1} dBFS",
-            config.normalisation_threshold_dbfs
-        );
-        debug!("Normalisation Method: {:?}", config.normalisation_method);
-
         // as_millis() has rounding errors (truncates)
         debug!(
             "Normalisation Attack: {:.0} ms",
@@ -201,25 +163,75 @@ impl Normalisation for DynamicNormalisation {
     }
 }
 
+#[derive(PartialEq)]
+enum Normalisation {
+    None,
+    Basic,
+    Dynamic(DynamicNormalisation),
+}
+
+impl Normalisation {
+    fn new(config: &PlayerConfig) -> Self {
+        if !config.normalisation {
+            Normalisation::None
+        } else {
+            debug!("Normalisation Type: {:?}", config.normalisation_type);
+            debug!(
+                "Normalisation Pregain: {:.1} dB",
+                config.normalisation_pregain_db
+            );
+
+            debug!(
+                "Normalisation Threshold: {:.1} dBFS",
+                config.normalisation_threshold_dbfs
+            );
+
+            debug!("Normalisation Method: {:?}", config.normalisation_method);
+
+            match config.normalisation_method {
+                NormalisationMethod::Dynamic => {
+                    Normalisation::Dynamic(DynamicNormalisation::new(config))
+                }
+                NormalisationMethod::Basic => Normalisation::Basic,
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Normalisation::Dynamic(ref mut d) = self {
+            d.stop()
+        }
+    }
+
+    fn normalise(&mut self, samples: &[f64], volume: f64, factor: f64) -> Vec<f64> {
+        use Normalisation::*;
+
+        match self {
+            None => NoNormalisation::normalise(samples, volume),
+            Basic => BasicNormalisation::normalise(samples, volume, factor),
+            Dynamic(ref mut d) => d.normalise(samples, volume, factor),
+        }
+    }
+}
+
 pub struct Normaliser {
-    normalisation: Box<dyn Normalisation>,
+    normalisation: Normalisation,
     volume_getter: Box<dyn VolumeGetter>,
+    normalisation_type: NormalisationType,
+    pregain_db: f64,
+    threshold_dbfs: f64,
     factor: f64,
 }
 
 impl Normaliser {
     pub fn new(config: &PlayerConfig, volume_getter: Box<dyn VolumeGetter>) -> Self {
-        let normalisation: Box<dyn Normalisation> =
-            match (config.normalisation, config.normalisation_method) {
-                (true, NormalisationMethod::Dynamic) => Box::new(DynamicNormalisation::new(config)),
-                (true, NormalisationMethod::Basic) => Box::new(BasicNormalisation::new(config)),
-                _ => Box::new(NoNormalisation::new(config)),
-            };
-
         Self {
-            normalisation,
+            normalisation: Normalisation::new(config),
             volume_getter,
-            factor: 0.0,
+            normalisation_type: config.normalisation_type,
+            pregain_db: config.normalisation_pregain_db,
+            threshold_dbfs: config.normalisation_threshold_dbfs,
+            factor: 1.0,
         }
     }
 
@@ -233,31 +245,51 @@ impl Normaliser {
         self.normalisation.stop();
     }
 
-    pub fn set_factor(&mut self, config: &PlayerConfig, data: NormalisationData) {
-        self.factor = Self::get_factor(config, data);
+    pub fn set_factor(&mut self, auto_normalise_as_album: bool, data: NormalisationData) {
+        if self.normalisation != Normalisation::None {
+            self.factor = self.get_factor(auto_normalise_as_album, data);
+        }
     }
 
-    fn get_factor(config: &PlayerConfig, data: NormalisationData) -> f64 {
-        if !config.normalisation {
-            return 1.0;
-        }
-
-        let (gain_db, gain_peak) = if config.normalisation_type == NormalisationType::Album {
-            (data.album_gain_db, data.album_peak)
-        } else {
-            (data.track_gain_db, data.track_peak)
+    fn get_factor(&self, auto_normalise_as_album: bool, data: NormalisationData) -> f64 {
+        let (gain_db, gain_peak, norm_type) = match self.normalisation_type {
+            NormalisationType::Album => (
+                data.album_gain_db,
+                data.album_peak,
+                NormalisationType::Album,
+            ),
+            NormalisationType::Track => (
+                data.track_gain_db,
+                data.track_peak,
+                NormalisationType::Track,
+            ),
+            NormalisationType::Auto => {
+                if auto_normalise_as_album {
+                    (
+                        data.album_gain_db,
+                        data.album_peak,
+                        NormalisationType::Album,
+                    )
+                } else {
+                    (
+                        data.track_gain_db,
+                        data.track_peak,
+                        NormalisationType::Track,
+                    )
+                }
+            }
         };
 
         // As per the ReplayGain 1.0 & 2.0 (proposed) spec:
         // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_1.0_specification#Clipping_prevention
         // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_2.0_specification#Clipping_prevention
-        let normalisation_factor = if config.normalisation_method == NormalisationMethod::Basic {
+        let normalisation_factor = if self.normalisation == Normalisation::Basic {
             // For Basic Normalisation, factor = min(ratio of (ReplayGain + PreGain), 1.0 / peak level).
             // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_1.0_specification#Peak_amplitude
             // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_2.0_specification#Peak_amplitude
             // We then limit that to 1.0 as not to exceed dBFS (0.0 dB).
             let factor = f64::min(
-                db_to_ratio(gain_db + config.normalisation_pregain_db),
+                db_to_ratio(gain_db + self.pregain_db),
                 PCM_AT_0DBFS / gain_peak,
             );
 
@@ -275,21 +307,19 @@ impl Normaliser {
             // For Dynamic Normalisation it's up to the player to decide,
             // factor = ratio of (ReplayGain + PreGain).
             // We then let the dynamic limiter handle gain reduction.
-            let factor = db_to_ratio(gain_db + config.normalisation_pregain_db);
-            let threshold_ratio = db_to_ratio(config.normalisation_threshold_dbfs);
+            let factor = db_to_ratio(gain_db + self.pregain_db);
+            let threshold_ratio = db_to_ratio(self.threshold_dbfs);
 
             if factor > PCM_AT_0DBFS {
-                let factor_db = gain_db + config.normalisation_pregain_db;
-                let limiting_db = factor_db + config.normalisation_threshold_dbfs.abs();
+                let factor_db = gain_db + self.pregain_db;
+                let limiting_db = factor_db + self.threshold_dbfs.abs();
 
                 warn!(
                     "This track may exceed dBFS by {:.2} dB and be subject to {:.2} dB of dynamic limiting at it's peak.",
                     factor_db, limiting_db
                 );
             } else if factor > threshold_ratio {
-                let limiting_db = gain_db
-                    + config.normalisation_pregain_db
-                    + config.normalisation_threshold_dbfs.abs();
+                let limiting_db = gain_db + self.pregain_db + self.threshold_dbfs.abs();
 
                 info!(
                     "This track may be subject to {:.2} dB of dynamic limiting at it's peak.",
@@ -303,7 +333,7 @@ impl Normaliser {
         debug!("Normalisation Data: {:?}", data);
         debug!(
             "Calculated Normalisation Factor for {:?}: {:.2}%",
-            config.normalisation_type,
+            norm_type,
             normalisation_factor * 100.0
         );
 

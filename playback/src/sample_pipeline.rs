@@ -26,8 +26,12 @@ impl SamplePipeline {
         self.normaliser.stop();
     }
 
-    pub fn set_normalisation_factor(&mut self, config: &PlayerConfig, data: NormalisationData) {
-        self.normaliser.set_factor(config, data);
+    pub fn set_normalisation_factor(
+        &mut self,
+        auto_normalise_as_album: bool,
+        data: NormalisationData,
+    ) {
+        self.normaliser.set_factor(auto_normalise_as_album, data);
     }
 
     pub fn process(&mut self, samples: &[f64]) -> Option<Vec<f64>> {
