@@ -20,7 +20,6 @@ use crate::audio::{
 };
 use crate::audio_backend::Sink;
 use crate::config::{Bitrate, PlayerConfig};
-use crate::convert::Converter;
 use crate::core::session::Session;
 use crate::core::spotify_id::SpotifyId;
 use crate::core::util::SeqGenerator;
@@ -55,12 +54,10 @@ struct PlayerInternal {
 
     state: PlayerState,
     preload: PlayerPreload,
-    sink: Box<dyn Sink>,
     sink_status: SinkStatus,
     sink_event_callback: Option<SinkEventCallback>,
     sample_pipeline: SamplePipeline,
     event_senders: Vec<mpsc::UnboundedSender<PlayerEvent>>,
-    converter: Converter,
 
     auto_normalise_as_album: bool,
 }
@@ -261,12 +258,10 @@ impl Player {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
 
-        let sample_pipeline = SamplePipeline::new(&config, volume_getter);
-
         let handle = thread::spawn(move || {
             debug!("new Player[{}]", session.session_id());
 
-            let converter = Converter::new(config.ditherer);
+            let sample_pipeline = SamplePipeline::new(&config, sink_builder(), volume_getter);
 
             let internal = PlayerInternal {
                 session,
@@ -275,12 +270,10 @@ impl Player {
 
                 state: PlayerState::Stopped,
                 preload: PlayerPreload::None,
-                sink: sink_builder(),
                 sink_status: SinkStatus::Closed,
                 sink_event_callback: None,
                 sample_pipeline,
                 event_senders: [event_sender].to_vec(),
-                converter,
 
                 auto_normalise_as_album: false,
             };
@@ -1078,7 +1071,7 @@ impl PlayerInternal {
             if let Some(callback) = &mut self.sink_event_callback {
                 callback(SinkStatus::Running);
             }
-            match self.sink.start() {
+            match self.sample_pipeline.start() {
                 Ok(()) => self.sink_status = SinkStatus::Running,
                 Err(e) => {
                     error!("{}", e);
@@ -1089,11 +1082,10 @@ impl PlayerInternal {
     }
 
     fn ensure_sink_stopped(&mut self, temporarily: bool) {
-        self.sample_pipeline.stop();
         match self.sink_status {
             SinkStatus::Running => {
                 trace!("== Stopping sink ==");
-                match self.sink.stop() {
+                match self.sample_pipeline.stop() {
                     Ok(()) => {
                         self.sink_status = if temporarily {
                             SinkStatus::TemporarilyClosed
@@ -1213,16 +1205,7 @@ impl PlayerInternal {
         match packet {
             Some(packet) => {
                 if !packet.is_empty() {
-                    if let AudioPacket::Samples(sample) = packet {
-                        if let Some(samples) = self.sample_pipeline.process(&sample) {
-                            let packet = AudioPacket::Samples(samples);
-
-                            if let Err(e) = self.sink.write(packet, &mut self.converter) {
-                                error!("{}", e);
-                                exit(1);
-                            }
-                        }
-                    } else if let Err(e) = self.sink.write(packet, &mut self.converter) {
+                    if let Err(e) = self.sample_pipeline.write(packet) {
                         error!("{}", e);
                         exit(1);
                     }

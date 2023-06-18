@@ -1,6 +1,7 @@
 use crate::{
     config::{NormalisationMethod, NormalisationType, PlayerConfig},
     db_to_ratio,
+    decoder::AudioPacket,
     mixer::VolumeGetter,
     player::NormalisationData,
     ratio_to_db, PCM_AT_0DBFS,
@@ -235,10 +236,10 @@ impl Normaliser {
         }
     }
 
-    pub fn normalise(&mut self, samples: &[f64]) -> Vec<f64> {
+    pub fn normalise(&mut self, samples: &[f64]) -> AudioPacket {
         let volume = self.volume_getter.attenuation_factor();
 
-        self.normalisation.normalise(samples, volume, self.factor)
+        AudioPacket::Samples(self.normalisation.normalise(samples, volume, self.factor))
     }
 
     pub fn stop(&mut self) {
