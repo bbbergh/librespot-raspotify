@@ -17,6 +17,8 @@ const COMMON_SAMPLE_RATES: [u32; 14] = [
     768000,
 ];
 
+const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44100, 48000, 88200, 96000];
+
 const FORMATS: [AudioFormat; 6] = [
     AudioFormat::S16,
     AudioFormat::S24,
@@ -116,7 +118,7 @@ fn list_compatible_devices() -> SinkResult<()> {
     let i = HintIter::new_str(None, "pcm").map_err(AlsaError::Parsing)?;
 
     println!("\n\n\tCompatible alsa device(s):\n");
-    println!("\t------------------------------------------------------\n");
+    println!("\t--------------------------------------------------------------------\n");
 
     for a in i {
         if let Some(Direction::Playback) = a.direction {
@@ -126,25 +128,57 @@ fn list_compatible_devices() -> SinkResult<()> {
                 if name.contains(':') && !name.starts_with("surround") {
                     if let Ok(pcm) = PCM::new(&name, Direction::Playback, false) {
                         if let Ok(hwp) = HwParams::any(&pcm) {
-                            // Only show devices that support
-                            // 2 ch 44.1 Interleaved.
-
                             if hwp.set_access(Access::RWInterleaved).is_ok()
-                                && hwp.set_rate(44100, ValueOr::Nearest).is_ok()
                                 && hwp.set_channels(NUM_CHANNELS as u32).is_ok()
                             {
-                                let supported_formats: Vec<String> = FORMATS
-                                    .iter()
-                                    .filter_map(|f| {
-                                        if hwp.test_format((*f).into()).is_ok() {
-                                            Some(format!("{f:?}"))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                                let mut supported_formats_and_samplerates = String::new();
 
-                                if !supported_formats.is_empty() {
+                                for format in FORMATS.iter() {
+                                    let hwp = hwp.clone();
+
+                                    if hwp.set_format((*format).into()).is_ok() {
+                                        let sample_rates: Vec<String> = SUPPORTED_SAMPLE_RATES
+                                            .iter()
+                                            .filter_map(|sample_rate| {
+                                                let hwp = hwp.clone();
+                                                if hwp
+                                                    .set_rate(*sample_rate, ValueOr::Nearest)
+                                                    .is_ok()
+                                                {
+                                                    match *sample_rate {
+                                                        44100 => Some("44.1kHz".to_string()),
+                                                        48000 => Some("48kHz".to_string()),
+                                                        88200 => Some("88.2kHz".to_string()),
+                                                        96000 => Some("96kHz".to_string()),
+                                                        _ => None,
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+
+                                        if !sample_rates.is_empty() {
+                                            let format_and_sample_rates =
+                                                if *format == AudioFormat::S24_3 {
+                                                    format!(
+                                                    "\n\t\tFormat: {format:?} Sample Rate(s): {}",
+                                                    sample_rates.join(", ")
+                                                )
+                                                } else {
+                                                    format!(
+                                                    "\n\t\tFormat: {format:?}   Sample Rate(s): {}",
+                                                    sample_rates.join(", ")
+                                                )
+                                                };
+
+                                            supported_formats_and_samplerates
+                                                .push_str(&format_and_sample_rates);
+                                        }
+                                    }
+                                }
+
+                                if !supported_formats_and_samplerates.is_empty() {
                                     println!("\tDevice:\n\n\t\t{name}\n");
 
                                     println!(
@@ -152,13 +186,10 @@ fn list_compatible_devices() -> SinkResult<()> {
                                         a.desc.unwrap_or_default().replace('\n', "\n\t\t")
                                     );
 
-                                    println!(
-                                        "\tSupported Format(s):\n\n\t\t{}\n",
-                                        supported_formats.join(" ")
-                                    );
+                                    println!("\tSupported Format & Sample Rate Combinations:\n{supported_formats_and_samplerates}\n");
 
                                     println!(
-                                        "\t------------------------------------------------------\n"
+                                        "\t--------------------------------------------------------------------\n"
                                     );
                                 }
                             }
