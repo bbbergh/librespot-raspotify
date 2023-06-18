@@ -66,7 +66,7 @@ impl std::fmt::Display for InterpolationQuality {
 }
 
 impl InterpolationQuality {
-    pub fn get_interpolation_coefficients(&self, resample_factor_reciprocal: f64) -> Vec<f64> {
+    fn get_interpolation_coefficients(&self, resample_factor_reciprocal: f64) -> Vec<f64> {
         let interpolation_coefficients_length = self.get_interpolation_coefficients_length();
 
         let mut coefficients = Vec::with_capacity(interpolation_coefficients_length);
@@ -256,7 +256,7 @@ impl DelayLine {
         }
     }
 
-    pub fn push(&mut self, sample: f64) {
+    fn push(&mut self, sample: f64) {
         self.buffer.push_back(sample);
 
         while self.buffer.len() > self.interpolation_coefficients_length {
@@ -264,7 +264,7 @@ impl DelayLine {
         }
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.buffer.clear();
     }
 }
@@ -498,19 +498,19 @@ impl ResampleWorker {
         }
     }
 
-    pub fn stop(&mut self) {
+    fn stop(&mut self) {
         self.task_sender
             .as_mut()
             .and_then(|sender| sender.send(ResampleTask::Stop).ok());
     }
 
-    pub fn process(&mut self, samples: Vec<f64>) {
+    fn process(&mut self, samples: Vec<f64>) {
         self.task_sender
             .as_mut()
             .and_then(|sender| sender.send(ResampleTask::ProcessSamples(samples)).ok());
     }
 
-    pub fn receive_result(&mut self) -> Option<Vec<f64>> {
+    fn receive_result(&mut self) -> Option<Vec<f64>> {
         self.result_receiver
             .as_mut()
             .and_then(|result_receiver| result_receiver.recv().ok())

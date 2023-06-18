@@ -19,7 +19,7 @@ use crate::audio::{
     READ_AHEAD_DURING_PLAYBACK_ROUNDTRIPS,
 };
 use crate::audio_backend::Sink;
-use crate::config::{Bitrate, NormalisationMethod, NormalisationType, PlayerConfig};
+use crate::config::{Bitrate, NormalisationType, PlayerConfig};
 use crate::convert::Converter;
 use crate::core::session::Session;
 use crate::core::spotify_id::SpotifyId;
@@ -27,13 +27,11 @@ use crate::core::util::SeqGenerator;
 use crate::decoder::{AudioDecoder, AudioPacket, DecoderError, PassthroughDecoder, VorbisDecoder};
 use crate::metadata::{AudioItem, FileFormat};
 use crate::mixer::VolumeGetter;
-use crate::resampler::StereoInterleavedResampler;
+use crate::sample_pipeline::SamplePipeline;
 
 use crate::{MS_PER_PAGE, NUM_CHANNELS, PAGES_PER_MS};
 
 const PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS: u32 = 30000;
-pub const DB_VOLTAGE_RATIO: f64 = 20.0;
-pub const PCM_AT_0DBFS: f64 = 1.0;
 
 pub struct Player {
     commands: Option<mpsc::UnboundedSender<PlayerCommand>>,
@@ -60,9 +58,7 @@ struct PlayerInternal {
     sink: Box<dyn Sink>,
     sink_status: SinkStatus,
     sink_event_callback: Option<SinkEventCallback>,
-    volume_getter: Box<dyn VolumeGetter + Send>,
-    normaliser: Normaliser,
-    resampler: StereoInterleavedResampler,
+    sample_pipeline: SamplePipeline,
     event_senders: Vec<mpsc::UnboundedSender<PlayerEvent>>,
     converter: Converter,
 
@@ -198,189 +194,12 @@ impl PlayerEvent {
 
 pub type PlayerEventChannel = mpsc::UnboundedReceiver<PlayerEvent>;
 
-pub fn db_to_ratio(db: f64) -> f64 {
-    f64::powf(10.0, db / DB_VOLTAGE_RATIO)
-}
-
-pub fn ratio_to_db(ratio: f64) -> f64 {
-    ratio.log10() * DB_VOLTAGE_RATIO
-}
-
-struct DynamicNormalisation {
-    threshold_db: f64,
-    attack_cf: f64,
-    release_cf: f64,
-    knee_db: f64,
-    integrator: f64,
-    peak: f64,
-}
-
-impl DynamicNormalisation {
-    fn normalise(&mut self, samples: &[f64], volume: f64, factor: f64) -> Vec<f64> {
-        samples
-            .iter()
-            .map(|sample| {
-                let mut sample = sample * factor;
-
-                // Feedforward limiter in the log domain
-                // After: Giannoulis, D., Massberg, M., & Reiss, J.D. (2012). Digital Dynamic
-                // Range Compressor Design—A Tutorial and Analysis. Journal of The Audio
-                // Engineering Society, 60, 399-408.
-
-                // Some tracks have samples that are precisely 0.0. That's silence
-                // and we know we don't need to limit that, in which we can spare
-                // the CPU cycles.
-                //
-                // Also, calling `ratio_to_db(0.0)` returns `inf` and would get the
-                // peak detector stuck. Also catch the unlikely case where a sample
-                // is decoded as `NaN` or some other non-normal value.
-                let limiter_db = if sample.is_normal() {
-                    // step 1-4: half-wave rectification and conversion into dB
-                    // and gain computer with soft knee and subtractor
-                    let bias_db = ratio_to_db(sample.abs()) - self.threshold_db;
-                    let knee_boundary_db = bias_db * 2.0;
-
-                    if knee_boundary_db < -self.knee_db {
-                        0.0
-                    } else if knee_boundary_db.abs() <= self.knee_db {
-                        // The textbook equation:
-                        // ratio_to_db(sample.abs()) - (ratio_to_db(sample.abs()) - (bias_db + knee_db / 2.0).powi(2) / (2.0 * knee_db))
-                        // Simplifies to:
-                        // ((2.0 * bias_db) + knee_db).powi(2) / (8.0 * knee_db)
-                        // Which in our case further simplifies to:
-                        // (knee_boundary_db + knee_db).powi(2) / (8.0 * knee_db)
-                        // because knee_boundary_db is 2.0 * bias_db.
-                        (knee_boundary_db + self.knee_db).powi(2) / (8.0 * self.knee_db)
-                    } else {
-                        // Textbook:
-                        // ratio_to_db(sample.abs()) - threshold_db, which is already our bias_db.
-                        bias_db
-                    }
-                } else {
-                    0.0
-                };
-
-                // Spare the CPU unless (1) the limiter is engaged, (2) we
-                // were in attack or (3) we were in release, and that attack/
-                // release wasn't finished yet.
-                if limiter_db > 0.0 || self.integrator > 0.0 || self.peak > 0.0 {
-                    // step 5: smooth, decoupled peak detector
-                    // Textbook:
-                    // release_cf * integrator + (1.0 - release_cf) * limiter_db
-                    // Simplifies to:
-                    // release_cf * integrator - release_cf * limiter_db + limiter_db
-                    self.integrator = limiter_db.max(
-                        self.release_cf * self.integrator - self.release_cf * limiter_db
-                            + limiter_db,
-                    );
-                    // Textbook:
-                    // attack_cf * peak + (1.0 - attack_cf) * integrator
-                    // Simplifies to:
-                    // attack_cf * peak - attack_cf * integrator + integrator
-                    self.peak = self.attack_cf * self.peak - self.attack_cf * self.integrator
-                        + self.integrator;
-
-                    // step 6: make-up gain applied later (volume attenuation)
-                    // Applying the standard normalisation factor here won't work,
-                    // because there are tracks with peaks as high as 6 dB above
-                    // the default threshold, so that would clip.
-
-                    // steps 7-8: conversion into level and multiplication into gain stage
-                    sample *= db_to_ratio(-self.peak);
-                }
-
-                sample * volume
-            })
-            .collect()
-    }
-}
-
-enum Normaliser {
-    No,
-    Basic,
-    Dynamic(DynamicNormalisation),
-}
-
-impl Normaliser {
-    fn new(config: &PlayerConfig) -> Self {
-        if config.normalisation {
-            debug!("Normalisation Type: {:?}", config.normalisation_type);
-            debug!(
-                "Normalisation Pregain: {:.1} dB",
-                config.normalisation_pregain_db
-            );
-            debug!(
-                "Normalisation Threshold: {:.1} dBFS",
-                config.normalisation_threshold_dbfs
-            );
-            debug!("Normalisation Method: {:?}", config.normalisation_method);
-
-            if config.normalisation_method == NormalisationMethod::Dynamic {
-                // as_millis() has rounding errors (truncates)
-                debug!(
-                    "Normalisation Attack: {:.0} ms",
-                    config
-                        .sample_rate
-                        .normalisation_coefficient_to_duration(config.normalisation_attack_cf)
-                        .as_secs_f64()
-                        * 1000.
-                );
-
-                debug!(
-                    "Normalisation Release: {:.0} ms",
-                    config
-                        .sample_rate
-                        .normalisation_coefficient_to_duration(config.normalisation_release_cf)
-                        .as_secs_f64()
-                        * 1000.
-                );
-
-                Normaliser::Dynamic(DynamicNormalisation {
-                    threshold_db: config.normalisation_threshold_dbfs,
-                    attack_cf: config.normalisation_attack_cf,
-                    release_cf: config.normalisation_release_cf,
-                    knee_db: config.normalisation_knee_db,
-                    integrator: 0.0,
-                    peak: 0.0,
-                })
-            } else {
-                Normaliser::Basic
-            }
-        } else {
-            Normaliser::No
-        }
-    }
-
-    fn normalise(&mut self, samples: &[f64], volume: f64, factor: f64) -> Vec<f64> {
-        match self {
-            Normaliser::Dynamic(d) => d.normalise(samples, volume, factor),
-            Normaliser::No => {
-                if volume < 1.0 {
-                    samples.iter().map(|sample| sample * volume).collect()
-                } else {
-                    samples.to_vec()
-                }
-            }
-            Normaliser::Basic => {
-                if volume < 1.0 || factor < 1.0 {
-                    samples
-                        .iter()
-                        .map(|sample| sample * factor * volume)
-                        .collect()
-                } else {
-                    samples.to_vec()
-                }
-            }
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct NormalisationData {
-    track_gain_db: f64,
-    track_peak: f64,
-    album_gain_db: f64,
-    album_peak: f64,
+    pub track_gain_db: f64,
+    pub track_peak: f64,
+    pub album_gain_db: f64,
+    pub album_peak: f64,
 }
 
 impl Default for NormalisationData {
@@ -427,79 +246,6 @@ impl NormalisationData {
             album_peak,
         })
     }
-
-    fn get_factor(config: &PlayerConfig, data: NormalisationData) -> f64 {
-        if !config.normalisation {
-            return 1.0;
-        }
-
-        let (gain_db, gain_peak) = if config.normalisation_type == NormalisationType::Album {
-            (data.album_gain_db, data.album_peak)
-        } else {
-            (data.track_gain_db, data.track_peak)
-        };
-
-        // As per the ReplayGain 1.0 & 2.0 (proposed) spec:
-        // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_1.0_specification#Clipping_prevention
-        // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_2.0_specification#Clipping_prevention
-        let normalisation_factor = if config.normalisation_method == NormalisationMethod::Basic {
-            // For Basic Normalisation, factor = min(ratio of (ReplayGain + PreGain), 1.0 / peak level).
-            // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_1.0_specification#Peak_amplitude
-            // https://wiki.hydrogenaud.io/index.php?title=ReplayGain_2.0_specification#Peak_amplitude
-            // We then limit that to 1.0 as not to exceed dBFS (0.0 dB).
-            let factor = f64::min(
-                db_to_ratio(gain_db + config.normalisation_pregain_db),
-                PCM_AT_0DBFS / gain_peak,
-            );
-
-            if factor > PCM_AT_0DBFS {
-                info!(
-                    "Lowering gain by {:.2} dB for the duration of this track to avoid potentially exceeding dBFS.",
-                    ratio_to_db(factor)
-                );
-
-                PCM_AT_0DBFS
-            } else {
-                factor
-            }
-        } else {
-            // For Dynamic Normalisation it's up to the player to decide,
-            // factor = ratio of (ReplayGain + PreGain).
-            // We then let the dynamic limiter handle gain reduction.
-            let factor = db_to_ratio(gain_db + config.normalisation_pregain_db);
-            let threshold_ratio = db_to_ratio(config.normalisation_threshold_dbfs);
-
-            if factor > PCM_AT_0DBFS {
-                let factor_db = gain_db + config.normalisation_pregain_db;
-                let limiting_db = factor_db + config.normalisation_threshold_dbfs.abs();
-
-                warn!(
-                    "This track may exceed dBFS by {:.2} dB and be subject to {:.2} dB of dynamic limiting at it's peak.",
-                    factor_db, limiting_db
-                );
-            } else if factor > threshold_ratio {
-                let limiting_db = gain_db
-                    + config.normalisation_pregain_db
-                    + config.normalisation_threshold_dbfs.abs();
-
-                info!(
-                    "This track may be subject to {:.2} dB of dynamic limiting at it's peak.",
-                    limiting_db
-                );
-            }
-
-            factor
-        };
-
-        debug!("Normalisation Data: {:?}", data);
-        debug!(
-            "Calculated Normalisation Factor for {:?}: {:.2}%",
-            config.normalisation_type,
-            normalisation_factor * 100.0
-        );
-
-        normalisation_factor
-    }
 }
 
 impl Player {
@@ -515,10 +261,7 @@ impl Player {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
 
-        let normaliser = Normaliser::new(&config);
-
-        let resampler =
-            StereoInterleavedResampler::new(config.sample_rate, config.interpolation_quality);
+        let sample_pipeline = SamplePipeline::new(&config, volume_getter);
 
         let handle = thread::spawn(move || {
             debug!("new Player[{}]", session.session_id());
@@ -535,9 +278,7 @@ impl Player {
                 sink: sink_builder(),
                 sink_status: SinkStatus::Closed,
                 sink_event_callback: None,
-                volume_getter,
-                normaliser,
-                resampler,
+                sample_pipeline,
                 event_senders: [event_sender].to_vec(),
                 converter,
 
@@ -680,7 +421,6 @@ enum PlayerState {
         play_request_id: u64,
         decoder: Decoder,
         normalisation_data: NormalisationData,
-        normalisation_factor: f64,
         stream_loader_controller: StreamLoaderController,
         bytes_per_second: usize,
         duration_ms: u32,
@@ -692,7 +432,6 @@ enum PlayerState {
         play_request_id: u64,
         decoder: Decoder,
         normalisation_data: NormalisationData,
-        normalisation_factor: f64,
         stream_loader_controller: StreamLoaderController,
         bytes_per_second: usize,
         duration_ms: u32,
@@ -811,7 +550,6 @@ impl PlayerState {
                 play_request_id,
                 decoder,
                 normalisation_data,
-                normalisation_factor,
                 stream_loader_controller,
                 duration_ms,
                 bytes_per_second,
@@ -823,7 +561,6 @@ impl PlayerState {
                     play_request_id,
                     decoder,
                     normalisation_data,
-                    normalisation_factor,
                     stream_loader_controller,
                     duration_ms,
                     bytes_per_second,
@@ -847,7 +584,6 @@ impl PlayerState {
                 play_request_id,
                 decoder,
                 normalisation_data,
-                normalisation_factor,
                 stream_loader_controller,
                 duration_ms,
                 bytes_per_second,
@@ -860,7 +596,6 @@ impl PlayerState {
                     play_request_id,
                     decoder,
                     normalisation_data,
-                    normalisation_factor,
                     stream_loader_controller,
                     duration_ms,
                     bytes_per_second,
@@ -1211,7 +946,6 @@ impl Future for PlayerInternal {
                     track_id,
                     play_request_id,
                     ref mut decoder,
-                    normalisation_factor,
                     ref mut stream_position_pcm,
                     ref mut reported_nominal_start_time,
                     duration_ms,
@@ -1270,7 +1004,7 @@ impl Future for PlayerInternal {
                                 *stream_position_pcm = duration_ms.into();
                             }
 
-                            self.handle_packet(packet, normalisation_factor);
+                            self.handle_packet(packet);
                         }
                         Err(e) => {
                             warn!("Skipping to next track, unable to get next packet for track <{:?}>: {:?}", track_id, e);
@@ -1355,7 +1089,7 @@ impl PlayerInternal {
     }
 
     fn ensure_sink_stopped(&mut self, temporarily: bool) {
-        self.resampler.stop();
+        self.sample_pipeline.stop();
         match self.sink_status {
             SinkStatus::Running => {
                 trace!("== Stopping sink ==");
@@ -1475,18 +1209,12 @@ impl PlayerInternal {
         }
     }
 
-    fn handle_packet(&mut self, packet: Option<AudioPacket>, normalisation_factor: f64) {
+    fn handle_packet(&mut self, packet: Option<AudioPacket>) {
         match packet {
             Some(packet) => {
                 if !packet.is_empty() {
                     if let AudioPacket::Samples(sample) = packet {
-                        if let Some(samples) = self.resampler.process(&sample) {
-                            let volume = self.volume_getter.attenuation_factor();
-
-                            let samples =
-                                self.normaliser
-                                    .normalise(&samples, volume, normalisation_factor);
-
+                        if let Some(samples) = self.sample_pipeline.process(&sample) {
                             let packet = AudioPacket::Samples(samples);
 
                             if let Err(e) = self.sink.write(packet, &mut self.converter) {
@@ -1538,8 +1266,9 @@ impl PlayerInternal {
                 config.normalisation_type = NormalisationType::Track;
             }
         };
-        let normalisation_factor =
-            NormalisationData::get_factor(&config, loaded_track.normalisation_data);
+
+        self.sample_pipeline
+            .set_normalisation_factor(&config, loaded_track.normalisation_data);
 
         if start_playback {
             self.ensure_sink_running();
@@ -1556,7 +1285,6 @@ impl PlayerInternal {
                 play_request_id,
                 decoder: loaded_track.decoder,
                 normalisation_data: loaded_track.normalisation_data,
-                normalisation_factor,
                 stream_loader_controller: loaded_track.stream_loader_controller,
                 duration_ms: loaded_track.duration_ms,
                 bytes_per_second: loaded_track.bytes_per_second,
@@ -1573,7 +1301,6 @@ impl PlayerInternal {
                 play_request_id,
                 decoder: loaded_track.decoder,
                 normalisation_data: loaded_track.normalisation_data,
-                normalisation_factor,
                 stream_loader_controller: loaded_track.stream_loader_controller,
                 duration_ms: loaded_track.duration_ms,
                 bytes_per_second: loaded_track.bytes_per_second,
