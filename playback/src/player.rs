@@ -252,7 +252,7 @@ impl Player {
     pub fn new<F>(
         config: PlayerConfig,
         session: Session,
-        volume_getter: Box<dyn VolumeGetter + Send>,
+        volume_getter: Box<dyn VolumeGetter>,
         sink_builder: F,
     ) -> (Player, PlayerEventChannel)
     where

@@ -9,7 +9,7 @@ pub struct SamplePipeline {
 }
 
 impl SamplePipeline {
-    pub fn new(config: &PlayerConfig, volume_getter: Box<dyn VolumeGetter + Send>) -> Self {
+    pub fn new(config: &PlayerConfig, volume_getter: Box<dyn VolumeGetter>) -> Self {
         let resampler =
             StereoInterleavedResampler::new(config.sample_rate, config.interpolation_quality);
 

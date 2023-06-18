@@ -203,12 +203,12 @@ impl Normalisation for DynamicNormalisation {
 
 pub struct Normaliser {
     normalisation: Box<dyn Normalisation>,
-    volume_getter: Box<dyn VolumeGetter + Send>,
+    volume_getter: Box<dyn VolumeGetter>,
     factor: f64,
 }
 
 impl Normaliser {
-    pub fn new(config: &PlayerConfig, volume_getter: Box<dyn VolumeGetter + Send>) -> Self {
+    pub fn new(config: &PlayerConfig, volume_getter: Box<dyn VolumeGetter>) -> Self {
         let normalisation: Box<dyn Normalisation> =
             match (config.normalisation, config.normalisation_method) {
                 (true, NormalisationMethod::Dynamic) => Box::new(DynamicNormalisation::new(config)),
