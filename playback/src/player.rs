@@ -258,9 +258,11 @@ impl Player {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
 
-        let handle = thread::spawn(move || {
-            debug!("new Player[{}]", session.session_id());
+        let thread_name = format!("librespot-player:{}", session.session_id());
 
+        let builder = thread::Builder::new().name(thread_name.clone());
+
+        let handle = match builder.spawn(move || {
             let sample_pipeline = SamplePipeline::new(&config, sink_builder(), volume_getter);
 
             let internal = PlayerInternal {
@@ -281,8 +283,21 @@ impl Player {
             // While PlayerInternal is written as a future, it still contains blocking code.
             // It must be run by using block_on() in a dedicated thread.
             futures_executor::block_on(internal);
-            debug!("PlayerInternal thread finished.");
-        });
+
+            match thread::current().name() {
+                Some(name) => debug!("<PlayerInternal> [{name}] thread finished"),
+                None => debug!("<PlayerInternal> thread finished"),
+            }
+        }) {
+            Ok(handle) => {
+                debug!("Created <PlayerInternal> [{thread_name}] thread");
+                handle
+            }
+            Err(e) => {
+                error!("Error creating <PlayerInternal> [{thread_name}] thread: {e}");
+                exit(1);
+            }
+        };
 
         (
             Player {
@@ -1744,12 +1759,30 @@ impl PlayerInternal {
 
         let (result_tx, result_rx) = oneshot::channel();
 
-        std::thread::spawn(move || {
+        let thread_name = format!(
+            "librespot-loader:{}",
+            spotify_id.to_uri().unwrap_or_default()
+        );
+
+        let builder = thread::Builder::new().name(thread_name.clone());
+
+        match builder.spawn(move || {
             let data = futures_executor::block_on(loader.load_track(spotify_id, position_ms));
             if let Some(data) = data {
                 let _ = result_tx.send(data);
+
+                match thread::current().name() {
+                    Some(name) => debug!("<PlayerInternal> [{name}] thread finished"),
+                    None => debug!("<PlayerInternal> [librespot-loader] thread finished"),
+                }
             }
-        });
+        }) {
+            Ok(_) => debug!("Created <PlayerInternal> [{thread_name}] thread"),
+            Err(e) => {
+                error!("Error creating <PlayerInternal> [{thread_name}] thread: {e}");
+                exit(1);
+            }
+        }
 
         result_rx.map_err(|_| ())
     }

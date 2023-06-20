@@ -594,8 +594,8 @@ impl StereoInterleavedResampler {
             _ => {
                 debug!("Interpolation Quality: {interpolation_quality}");
 
-                let left_thread_name = "librespot-left-resampler".to_string();
-                let right_thread_name = "librespot-right-resampler".to_string();
+                let left_thread_name = "librespot-resampler:left".to_string();
+                let right_thread_name = "librespot-resampler:right".to_string();
 
                 match interpolation_quality {
                     InterpolationQuality::Low => {
