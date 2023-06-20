@@ -486,12 +486,7 @@ impl PlayerState {
         use self::PlayerState::*;
         match *self {
             Stopped | EndOfTrack { .. } | Loading { .. } => None,
-            Paused {
-                duration_ms, ..
-            }
-            | Playing {
-                duration_ms, ..
-            } => Some(duration_ms),
+            Paused { duration_ms, .. } | Playing { duration_ms, .. } => Some(duration_ms),
             Invalid => {
                 error!("PlayerState duration_ms: invalid state");
                 exit(1);
@@ -1500,7 +1495,8 @@ impl PlayerInternal {
                     mut loaded_track,
                 } = preload
                 {
-                    let position_pcm = Self::get_relative_position_pcm(position_ms, loaded_track.duration_ms);
+                    let position_pcm =
+                        Self::get_relative_position_pcm(position_ms, loaded_track.duration_ms);
 
                     if position_pcm != loaded_track.stream_position_pcm {
                         loaded_track

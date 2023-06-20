@@ -470,15 +470,23 @@ struct ResampleWorker {
 }
 
 impl ResampleWorker {
-    fn new(mut resampler: impl MonoResampler + std::marker::Send + 'static) -> Self {
+    fn new(mut resampler: impl MonoResampler + std::marker::Send + 'static, name: String) -> Self {
         let (task_sender, task_receiver) = std::sync::mpsc::channel();
         let (result_sender, result_receiver) = std::sync::mpsc::channel();
 
-        let handle = std::thread::spawn(move || loop {
+        let builder = std::thread::Builder::new().name(name.clone());
+
+        let handle = match builder.spawn(move || loop {
             match task_receiver.recv() {
-                Err(_) => break,
+                Err(e) => {
+                    match std::thread::current().name() {
+                        Some(name) => error!("Error in <ResampleWorker>: [{name}] thread: {e}"),
+                        None => error!("Error in <ResampleWorker> thread: {e}"),
+                    }
+
+                    std::process::exit(1);
+                }
                 Ok(task) => match task {
-                    ResampleTask::Terminate => break,
                     ResampleTask::Stop => resampler.stop(),
                     ResampleTask::ProcessSamples(samples) => {
                         let samples = resampler.resample(&samples);
@@ -487,9 +495,26 @@ impl ResampleWorker {
                             .send(ResampleResult::ProcessedSamples(samples))
                             .ok();
                     }
+                    ResampleTask::Terminate => {
+                        match std::thread::current().name() {
+                            Some(name) => debug!("drop <ResampleWorker>: [{name}] thread"),
+                            None => debug!("drop <ResampleWorker> thread"),
+                        }
+
+                        break;
+                    }
                 },
             }
-        });
+        }) {
+            Ok(handle) => {
+                debug!("Created <ResampleWorker>: [{name}] thread");
+                handle
+            }
+            Err(e) => {
+                error!("Error creating <ResampleWorker>: [{name}] thread: {e}");
+                std::process::exit(1);
+            }
+        };
 
         Self {
             task_sender: Some(task_sender),
@@ -557,31 +582,52 @@ pub struct StereoInterleavedResampler {
 
 impl StereoInterleavedResampler {
     pub fn new(sample_rate: SampleRate, interpolation_quality: InterpolationQuality) -> Self {
+        debug!("Sample Rate: {sample_rate}");
+
         let resampler = match sample_rate {
-            // Our sample rate is the same as our input sample rate.
-            // We don't need thread workers since we're not resampling.
-            SampleRate::Hz44100 => Resampler::Bypass,
+            SampleRate::Hz44100 => {
+                debug!("Interpolation Type: Bypass");
+                debug!("No <ResampleWorker> threads required");
+
+                Resampler::Bypass
+            }
             _ => {
+                debug!("Interpolation Quality: {interpolation_quality}");
+
                 match interpolation_quality {
                     InterpolationQuality::Low => {
-                        // Low = Linear Interpolation.
+                        debug!("Interpolation Type: Linear");
+
                         let left = MonoLinearResampler::new(sample_rate, interpolation_quality);
                         let right = MonoLinearResampler::new(sample_rate, interpolation_quality);
 
                         Resampler::Worker {
-                            left_resampler: ResampleWorker::new(left),
-                            right_resampler: ResampleWorker::new(right),
+                            left_resampler: ResampleWorker::new(
+                                left,
+                                "LinearResampler Left  Channel".to_string(),
+                            ),
+                            right_resampler: ResampleWorker::new(
+                                right,
+                                "LinearResampler Right Channel".to_string(),
+                            ),
                         }
                     }
                     _ => {
-                        // Medium or High = Windowed Sinc interpolation.
+                        debug!("Interpolation Type: Windowed Sinc");
+
                         let left = MonoSincResampler::new(sample_rate, interpolation_quality);
 
                         let right = MonoSincResampler::new(sample_rate, interpolation_quality);
 
                         Resampler::Worker {
-                            left_resampler: ResampleWorker::new(left),
-                            right_resampler: ResampleWorker::new(right),
+                            left_resampler: ResampleWorker::new(
+                                left,
+                                "SincResampler Left  Channel".to_string(),
+                            ),
+                            right_resampler: ResampleWorker::new(
+                                right,
+                                "SincResampler Right Channel".to_string(),
+                            ),
                         }
                     }
                 }
