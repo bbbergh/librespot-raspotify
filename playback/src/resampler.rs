@@ -480,7 +480,7 @@ impl ResampleWorker {
             match task_receiver.recv() {
                 Err(e) => {
                     match std::thread::current().name() {
-                        Some(name) => error!("Error in <ResampleWorker>: [{name}] thread: {e}"),
+                        Some(name) => error!("Error in <ResampleWorker> [{name}] thread: {e}"),
                         None => error!("Error in <ResampleWorker> thread: {e}"),
                     }
 
@@ -497,7 +497,7 @@ impl ResampleWorker {
                     }
                     ResampleTask::Terminate => {
                         match std::thread::current().name() {
-                            Some(name) => debug!("drop <ResampleWorker>: [{name}] thread"),
+                            Some(name) => debug!("drop <ResampleWorker> [{name}] thread"),
                             None => debug!("drop <ResampleWorker> thread"),
                         }
 
@@ -507,11 +507,11 @@ impl ResampleWorker {
             }
         }) {
             Ok(handle) => {
-                debug!("Created <ResampleWorker>: [{name}] thread");
+                debug!("Created <ResampleWorker> [{name}] thread");
                 handle
             }
             Err(e) => {
-                error!("Error creating <ResampleWorker>: [{name}] thread: {e}");
+                error!("Error creating <ResampleWorker> [{name}] thread: {e}");
                 std::process::exit(1);
             }
         };
@@ -594,6 +594,9 @@ impl StereoInterleavedResampler {
             _ => {
                 debug!("Interpolation Quality: {interpolation_quality}");
 
+                let left_thread_name = "librespot-left-resampler".to_string();
+                let right_thread_name = "librespot-right-resampler".to_string();
+
                 match interpolation_quality {
                     InterpolationQuality::Low => {
                         debug!("Interpolation Type: Linear");
@@ -602,32 +605,19 @@ impl StereoInterleavedResampler {
                         let right = MonoLinearResampler::new(sample_rate, interpolation_quality);
 
                         Resampler::Worker {
-                            left_resampler: ResampleWorker::new(
-                                left,
-                                "LinearResampler Left  Channel".to_string(),
-                            ),
-                            right_resampler: ResampleWorker::new(
-                                right,
-                                "LinearResampler Right Channel".to_string(),
-                            ),
+                            left_resampler: ResampleWorker::new(left, left_thread_name),
+                            right_resampler: ResampleWorker::new(right, right_thread_name),
                         }
                     }
                     _ => {
                         debug!("Interpolation Type: Windowed Sinc");
 
                         let left = MonoSincResampler::new(sample_rate, interpolation_quality);
-
                         let right = MonoSincResampler::new(sample_rate, interpolation_quality);
 
                         Resampler::Worker {
-                            left_resampler: ResampleWorker::new(
-                                left,
-                                "SincResampler Left  Channel".to_string(),
-                            ),
-                            right_resampler: ResampleWorker::new(
-                                right,
-                                "SincResampler Right Channel".to_string(),
-                            ),
+                            left_resampler: ResampleWorker::new(left, left_thread_name),
+                            right_resampler: ResampleWorker::new(right, right_thread_name),
                         }
                     }
                 }
