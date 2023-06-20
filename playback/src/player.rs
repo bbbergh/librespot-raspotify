@@ -810,7 +810,7 @@ impl PlayerTrackLoader {
                 }
             };
 
-            let position_pcm = PlayerInternal::position_ms_to_pcm(position_ms);
+            let position_pcm = PlayerInternal::get_relative_position_pcm(position_ms, duration_ms);
 
             if position_pcm != 0 {
                 if let Err(e) = decoder.seek(position_pcm) {
@@ -1063,6 +1063,13 @@ impl PlayerInternal {
 
     fn position_ms_to_pcm(position_ms: u32) -> u64 {
         (position_ms as f64 * PAGES_PER_MS) as u64
+    }
+
+    fn get_relative_position_pcm(position_ms: u32, duration_ms: u32) -> u64 {
+        let position_pcm = (position_ms as f64 * PAGES_PER_MS).round() as u64;
+        let duration_ms_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
+
+        position_pcm.min(duration_ms_pcm)
     }
 
     fn ensure_sink_running(&mut self) {
