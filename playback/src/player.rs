@@ -482,6 +482,23 @@ impl PlayerState {
         }
     }
 
+    fn duration_ms(&mut self) -> Option<u32> {
+        use self::PlayerState::*;
+        match *self {
+            Stopped | EndOfTrack { .. } | Loading { .. } => None,
+            Paused {
+                duration_ms, ..
+            }
+            | Playing {
+                duration_ms, ..
+            } => Some(duration_ms),
+            Invalid => {
+                error!("PlayerState duration_ms: invalid state");
+                exit(1);
+            }
+        }
+    }
+
     fn stream_loader_controller(&mut self) -> Option<&mut StreamLoaderController> {
         use self::PlayerState::*;
         match *self {
@@ -1342,6 +1359,8 @@ impl PlayerInternal {
             }
         }
 
+        let state_duration = self.state.duration_ms();
+
         // Now we check at different positions whether we already have a pre-loaded version
         // of this track somewhere. If so, use it and return.
 
@@ -1361,7 +1380,10 @@ impl PlayerInternal {
                     }
                 };
 
-                let position_pcm = Self::position_ms_to_pcm(position_ms);
+                let position_pcm = match state_duration {
+                    Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
+                    None => Self::position_ms_to_pcm(position_ms),
+                };
 
                 if position_pcm != loaded_track.stream_position_pcm {
                     loaded_track
@@ -1402,7 +1424,10 @@ impl PlayerInternal {
         {
             if current_track_id == track_id {
                 // we can use the current decoder. Ensure it's at the correct position.
-                let position_pcm = Self::position_ms_to_pcm(position_ms);
+                let position_pcm = match state_duration {
+                    Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
+                    None => Self::position_ms_to_pcm(position_ms),
+                };
 
                 if position_pcm != *stream_position_pcm {
                     stream_loader_controller.set_random_access_mode();
@@ -1475,7 +1500,7 @@ impl PlayerInternal {
                     mut loaded_track,
                 } = preload
                 {
-                    let position_pcm = Self::position_ms_to_pcm(position_ms);
+                    let position_pcm = Self::get_relative_position_pcm(position_ms, loaded_track.duration_ms);
 
                     if position_pcm != loaded_track.stream_position_pcm {
                         loaded_track
@@ -1593,11 +1618,16 @@ impl PlayerInternal {
     }
 
     fn handle_command_seek(&mut self, position_ms: u32) {
+        let state_duration = self.state.duration_ms();
+
         if let Some(stream_loader_controller) = self.state.stream_loader_controller() {
             stream_loader_controller.set_random_access_mode();
         }
         if let Some(decoder) = self.state.decoder() {
-            let position_pcm = Self::position_ms_to_pcm(position_ms);
+            let position_pcm = match state_duration {
+                Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
+                None => Self::position_ms_to_pcm(position_ms),
+            };
 
             match decoder.seek(position_pcm) {
                 Ok(_) => {
