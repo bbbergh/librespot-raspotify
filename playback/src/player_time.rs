@@ -6,17 +6,14 @@ const PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS: u32 = 30000;
 pub struct PlayerTime;
 
 impl PlayerTime {
-    #[inline]
     pub fn samples_to_pcm(samples: &[f64]) -> u64 {
         (samples.len() / NUM_CHANNELS as usize) as u64
     }
 
-    #[inline]
     fn position_ms_to_pcm(position_ms: u32) -> u64 {
         (position_ms as f64 * PAGES_PER_MS) as u64
     }
 
-    #[inline]
     pub fn get_relative_position_pcm(position_ms: u32, duration_ms: u32) -> u64 {
         let position_pcm = (position_ms as f64 * PAGES_PER_MS).round() as u64;
         let duration_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
@@ -24,7 +21,6 @@ impl PlayerTime {
         position_pcm.min(duration_pcm)
     }
 
-    #[inline]
     pub fn get_maybe_relative_position_pcm(
         position_ms: u32,
         maybe_duration_ms: Option<u32>,
@@ -35,20 +31,23 @@ impl PlayerTime {
         }
     }
 
-    #[inline]
     pub fn get_relative_position_ms(position_pcm: u64, duration_ms: u32) -> u32 {
         let position_ms = (position_pcm as f64 * MS_PER_PAGE).round() as u32;
 
         position_ms.min(duration_ms)
     }
 
-    #[inline]
     pub fn should_preload(position_pcm: u64, duration_ms: u32) -> bool {
         duration_ms.saturating_sub(Self::get_relative_position_ms(position_pcm, duration_ms))
             < PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS
     }
 
-    #[inline]
+    pub fn get_nominal_start_time(position_ms: u32, duration_ms: u32) -> Option<Instant> {
+        let position_ms = position_ms.min(duration_ms);
+
+        Instant::now().checked_sub(Duration::from_millis(position_ms as u64))
+    }
+
     pub fn should_notify(
         position_pcm: u64,
         latency_pcm: u64,
@@ -61,7 +60,7 @@ impl PlayerTime {
 
         let track_position = Duration::from_millis(position_ms as u64);
 
-        let new_start_time = Instant::now().checked_sub(track_position);
+        let new_start_time = Self::get_nominal_start_time(position_ms, duration_ms);
 
         match start_time {
             None => Some((new_start_time, position_ms)),

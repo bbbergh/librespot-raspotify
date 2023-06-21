@@ -4,7 +4,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::pin::Pin;
 use std::process::exit;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{mem, thread};
 
 use futures_util::{
@@ -1277,8 +1277,10 @@ impl PlayerInternal {
                 duration_ms: loaded_track.duration_ms,
                 bytes_per_second: loaded_track.bytes_per_second,
                 stream_position_pcm: loaded_track.stream_position_pcm,
-                reported_nominal_start_time: Instant::now()
-                    .checked_sub(Duration::from_millis(position_ms as u64)),
+                reported_nominal_start_time: PlayerTime::get_nominal_start_time(
+                    position_ms,
+                    loaded_track.duration_ms,
+                ),
                 suggested_to_preload_next_track: false,
             };
         } else {
@@ -1652,7 +1654,8 @@ impl PlayerInternal {
         } = self.state
         {
             *reported_nominal_start_time =
-                Instant::now().checked_sub(Duration::from_millis(position_ms as u64));
+                PlayerTime::get_nominal_start_time(position_ms, duration_ms);
+
             self.send_event(PlayerEvent::Playing {
                 track_id,
                 play_request_id,
