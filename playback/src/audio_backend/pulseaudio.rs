@@ -2,7 +2,7 @@ use super::{Open, Sink, SinkAsBytes, SinkError, SinkResult};
 use crate::config::AudioFormat;
 use crate::convert::Converter;
 use crate::decoder::AudioPacket;
-use crate::NUM_CHANNELS;
+use crate::{NUM_CHANNELS, SAMPLE_RATE as DECODER_SAMPLE_RATE};
 use libpulse_binding::{self as pulse, error::PAErr, stream::Direction};
 use libpulse_simple_binding::Simple;
 use std::env;
@@ -60,6 +60,7 @@ pub struct PulseAudioSink {
     stream_desc: String,
     format: AudioFormat,
     sample_rate: u32,
+
     sample_spec: pulse::sample::Spec,
 }
 
@@ -133,6 +134,17 @@ impl Sink for PulseAudioSink {
         }
 
         Ok(())
+    }
+
+    fn get_latency_pcm(&mut self) -> u64 {
+        self.sink
+            .as_mut()
+            .and_then(|sink| {
+                sink.get_latency().ok().map(|micro_sec| {
+                    (micro_sec.as_secs_f64() * DECODER_SAMPLE_RATE as f64).round() as u64
+                })
+            })
+            .unwrap_or(0)
     }
 
     sink_as_bytes!();

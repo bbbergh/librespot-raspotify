@@ -2,7 +2,7 @@ use super::{Open, Sink, SinkAsBytes, SinkError, SinkResult};
 use crate::config::AudioFormat;
 use crate::convert::Converter;
 use crate::decoder::AudioPacket;
-use crate::NUM_CHANNELS;
+use crate::{NUM_CHANNELS, SAMPLE_RATE as DECODER_SAMPLE_RATE};
 use alsa::device_name::HintIter;
 use alsa::pcm::{Access, Format, Frames, HwParams, PCM};
 use alsa::{Direction, ValueOr};
@@ -110,6 +110,7 @@ pub struct AlsaSink {
     pcm: Option<PCM>,
     format: AudioFormat,
     sample_rate: u32,
+    latency_scale_factor: f64,
     device: String,
     period_buffer: Vec<u8>,
 }
@@ -220,12 +221,15 @@ impl Open for AlsaSink {
         }
         .to_string();
 
+        let latency_scale_factor = DECODER_SAMPLE_RATE as f64 / sample_rate as f64;
+
         info!("Using AlsaSink with format: {format:?}, sample rate: {sample_rate}");
 
         Self {
             pcm: None,
             format,
             sample_rate,
+            latency_scale_factor,
             device: name,
             period_buffer: vec![],
         }
@@ -252,6 +256,26 @@ impl Sink for AlsaSink {
         }
 
         Ok(())
+    }
+
+    fn get_latency_pcm(&mut self) -> u64 {
+        let buffer_len = self.period_buffer.len();
+        let latency_scale_factor = self.latency_scale_factor;
+
+        self.pcm
+            .as_mut()
+            .and_then(|pcm| {
+                pcm.status().ok().map(|status| {
+                    let delay_frames = status.get_delay();
+
+                    let frames_in_buffer = pcm.bytes_to_frames(buffer_len as isize);
+
+                    let total_frames = (delay_frames + frames_in_buffer) as f64;
+
+                    (total_frames * latency_scale_factor).round() as u64
+                })
+            })
+            .unwrap_or(0)
     }
 
     sink_as_bytes!();

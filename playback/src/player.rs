@@ -962,6 +962,8 @@ impl Future for PlayerInternal {
             if self.state.is_playing() {
                 self.ensure_sink_running();
 
+                let sample_pipeline_latency_pcm = self.sample_pipeline.get_latency_pcm();
+
                 if let PlayerState::Playing {
                     track_id,
                     play_request_id,
@@ -980,28 +982,35 @@ impl Future for PlayerInternal {
                                         Ok(samples) => {
                                             *stream_position_pcm +=
                                                 (samples.len() / NUM_CHANNELS as usize) as u64;
-                                            let stream_position_millis =
-                                                Self::position_pcm_to_ms(*stream_position_pcm);
+
+                                            let stream_position_millis = Self::position_pcm_to_ms(
+                                                stream_position_pcm
+                                                    .saturating_sub(sample_pipeline_latency_pcm),
+                                            );
+
+                                            let track_position = Duration::from_millis(
+                                                stream_position_millis as u64,
+                                            );
 
                                             let notify_about_position =
                                                 match *reported_nominal_start_time {
                                                     None => true,
                                                     Some(reported_nominal_start_time) => {
-                                                        // only notify if we're behind. If we're ahead it's probably due to a buffer of the backend and we're actually in time.
-                                                        let lag = (Instant::now()
-                                                            - reported_nominal_start_time)
-                                                            .as_millis()
-                                                            as i64
-                                                            - stream_position_millis as i64;
-                                                        lag > Duration::from_secs(1).as_millis()
-                                                            as i64
+                                                        // Only notify if we're behind,
+                                                        // more than likely due to sample pipeline latency.
+                                                        Instant::now()
+                                                            .duration_since(
+                                                                reported_nominal_start_time,
+                                                            )
+                                                            .saturating_sub(track_position)
+                                                            .as_secs()
+                                                            >= 1
                                                     }
                                                 };
                                             if notify_about_position {
-                                                *reported_nominal_start_time = Instant::now()
-                                                    .checked_sub(Duration::from_millis(
-                                                        stream_position_millis as u64,
-                                                    ));
+                                                *reported_nominal_start_time =
+                                                    Instant::now().checked_sub(track_position);
+
                                                 self.send_event(PlayerEvent::Playing {
                                                     track_id,
                                                     play_request_id,

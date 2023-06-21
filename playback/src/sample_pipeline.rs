@@ -36,6 +36,10 @@ impl SamplePipeline {
         }
     }
 
+    pub fn get_latency_pcm(&mut self) -> u64 {
+        self.sink.get_latency_pcm() + self.resampler.get_latency_pcm()
+    }
+
     pub fn start(&mut self) -> SinkResult<()> {
         self.sink.start()?;
 

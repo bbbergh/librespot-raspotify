@@ -1,5 +1,6 @@
+use crate::SAMPLE_RATE as SOURCE_SAMPLE_RATE;
+
 const INPUT_SIZE: usize = 147;
-const SOURCE_SAMPLE_RATE: usize = 44_100;
 
 // Reciprocals allow us to multiply instead of divide during interpolation.
 const HZ48000_RESAMPLE_FACTOR_RECIPROCAL: f64 = SOURCE_SAMPLE_RATE as f64 / 48_000.0;
@@ -333,6 +334,7 @@ trait MonoResampler {
         Self: Sized;
 
     fn stop(&mut self);
+    fn get_latency_pcm(&mut self) -> u64;
     fn resample(&mut self, samples: &[f64]) -> Option<Vec<f64>>;
 }
 
@@ -340,6 +342,7 @@ struct MonoSincResampler {
     interpolator: WindowedSincInterpolator,
     input_buffer: Vec<f64>,
     resample_factor_reciprocal: f64,
+    delay_line_latency: u64,
     interpolation_output_size: usize,
 }
 
@@ -347,16 +350,26 @@ impl MonoResampler for MonoSincResampler {
     fn new(sample_rate: SampleRate, interpolation_quality: InterpolationQuality) -> Self {
         let spec = sample_rate.get_resample_spec();
 
+        let delay_line_latency = (interpolation_quality.get_interpolation_coefficients_length()
+            as f64
+            * spec.resample_factor_reciprocal)
+            .round() as u64;
+
         Self {
             interpolator: WindowedSincInterpolator::new(
                 interpolation_quality,
                 spec.resample_factor_reciprocal,
             ),
 
-            input_buffer: Vec::with_capacity(SOURCE_SAMPLE_RATE),
+            input_buffer: Vec::with_capacity(SOURCE_SAMPLE_RATE as usize),
             resample_factor_reciprocal: spec.resample_factor_reciprocal,
+            delay_line_latency,
             interpolation_output_size: spec.interpolation_output_size,
         }
+    }
+
+    fn get_latency_pcm(&mut self) -> u64 {
+        self.input_buffer.len() as u64 + self.delay_line_latency
     }
 
     fn stop(&mut self) {
@@ -407,10 +420,14 @@ impl MonoResampler for MonoLinearResampler {
         let spec = sample_rate.get_resample_spec();
 
         Self {
-            input_buffer: Vec::with_capacity(SOURCE_SAMPLE_RATE),
+            input_buffer: Vec::with_capacity(SOURCE_SAMPLE_RATE as usize),
             resample_factor_reciprocal: spec.resample_factor_reciprocal,
             interpolation_output_size: spec.interpolation_output_size,
         }
+    }
+
+    fn get_latency_pcm(&mut self) -> u64 {
+        self.input_buffer.len() as u64
     }
 
     fn stop(&mut self) {
@@ -456,10 +473,12 @@ impl MonoResampler for MonoLinearResampler {
 enum ResampleTask {
     Stop,
     Terminate,
+    GetLatency,
     ProcessSamples(Vec<f64>),
 }
 
 enum ResampleResult {
+    Latency(u64),
     ProcessedSamples(Option<Vec<f64>>),
 }
 
@@ -488,6 +507,11 @@ impl ResampleWorker {
                 }
                 Ok(task) => match task {
                     ResampleTask::Stop => resampler.stop(),
+                    ResampleTask::GetLatency => {
+                        let latency = resampler.get_latency_pcm();
+
+                        result_sender.send(ResampleResult::Latency(latency)).ok();
+                    }
                     ResampleTask::ProcessSamples(samples) => {
                         let samples = resampler.resample(&samples);
 
@@ -523,6 +547,21 @@ impl ResampleWorker {
         }
     }
 
+    fn get_latency_pcm(&mut self) -> u64 {
+        self.task_sender
+            .as_mut()
+            .and_then(|sender| sender.send(ResampleTask::GetLatency).ok());
+
+        self.result_receiver
+            .as_mut()
+            .and_then(|result_receiver| result_receiver.recv().ok())
+            .and_then(|result| match result {
+                ResampleResult::Latency(latency) => Some(latency),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn stop(&mut self) {
         self.task_sender
             .as_mut()
@@ -541,6 +580,7 @@ impl ResampleWorker {
             .and_then(|result_receiver| result_receiver.recv().ok())
             .and_then(|result| match result {
                 ResampleResult::ProcessedSamples(samples) => samples,
+                _ => None,
             })
     }
 }
@@ -625,6 +665,14 @@ impl StereoInterleavedResampler {
         };
 
         Self { resampler }
+    }
+
+    pub fn get_latency_pcm(&mut self) -> u64 {
+        match &mut self.resampler {
+            Resampler::Bypass => 0,
+            // We only need the latency from 1 channel for the number of PCM Frames.
+            Resampler::Worker { left_resampler, .. } => left_resampler.get_latency_pcm(),
+        }
     }
 
     pub fn process(&mut self, input_samples: &[f64]) -> Option<Vec<f64>> {
