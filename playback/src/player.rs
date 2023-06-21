@@ -977,8 +977,11 @@ impl Future for PlayerInternal {
                                 if let Some(ref packet) = packet {
                                     match packet.samples() {
                                         Ok(samples) => {
-                                            *stream_position_pcm +=
-                                                PlayerTime::samples_to_pcm(samples);
+                                            *stream_position_pcm = PlayerTime::get_new_position_pcm(
+                                                samples.len(),
+                                                *stream_position_pcm,
+                                                duration_ms,
+                                            );
 
                                             if let Some((new_start_time, position_ms)) =
                                                 PlayerTime::should_notify(

@@ -6,8 +6,11 @@ const PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS: u32 = 30000;
 pub struct PlayerTime;
 
 impl PlayerTime {
-    pub fn samples_to_pcm(samples: &[f64]) -> u64 {
-        (samples.len() / NUM_CHANNELS as usize) as u64
+    pub fn get_new_position_pcm(samples_len: usize, position_pcm: u64, duration_ms: u32) -> u64 {
+        let position_pcm = (samples_len / NUM_CHANNELS as usize) as u64 + position_pcm;
+        let duration_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
+
+        position_pcm.min(duration_pcm)
     }
 
     fn position_ms_to_pcm(position_ms: u32) -> u64 {
