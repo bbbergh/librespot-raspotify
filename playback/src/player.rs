@@ -258,7 +258,7 @@ impl Player {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
 
-        let thread_name = format!("librespot-player:{}", session.session_id());
+        let thread_name = format!("player:{}", session.session_id());
 
         let builder = thread::Builder::new().name(thread_name.clone());
 
@@ -1768,10 +1768,7 @@ impl PlayerInternal {
 
         let (result_tx, result_rx) = oneshot::channel();
 
-        let thread_name = format!(
-            "librespot-loader:{}",
-            spotify_id.to_uri().unwrap_or_default()
-        );
+        let thread_name = format!("loader:{}", spotify_id.to_uri().unwrap_or_default());
 
         let builder = thread::Builder::new().name(thread_name.clone());
 
@@ -1782,7 +1779,7 @@ impl PlayerInternal {
 
                 match thread::current().name() {
                     Some(name) => debug!("<PlayerInternal> [{name}] thread finished"),
-                    None => debug!("<PlayerInternal> [librespot-loader] thread finished"),
+                    None => debug!("<PlayerInternal> [loader] thread finished"),
                 }
             }
         }) {
