@@ -618,6 +618,7 @@ enum Resampler {
 #[derive(Default)]
 pub struct StereoInterleavedResampler {
     resampler: Resampler,
+    alternating_flag: bool,
 }
 
 impl StereoInterleavedResampler {
@@ -664,15 +665,37 @@ impl StereoInterleavedResampler {
             }
         };
 
-        Self { resampler }
+        Self {
+            resampler,
+            alternating_flag: true,
+        }
     }
 
     pub fn get_latency_pcm(&mut self) -> u64 {
+        let alternate_flag = self.alternate_flag();
+
         match &mut self.resampler {
             Resampler::Bypass => 0,
-            // We only need the latency from 1 channel for the number of PCM Frames.
-            Resampler::Worker { left_resampler, .. } => left_resampler.get_latency_pcm(),
+            Resampler::Worker {
+                left_resampler,
+                right_resampler,
+            } => {
+                // We only actually need the latency
+                // from one channel for PCM frame latency
+                // to balance the load we alternate.
+                if alternate_flag {
+                    left_resampler.get_latency_pcm()
+                } else {
+                    right_resampler.get_latency_pcm()
+                }
+            }
         }
+    }
+
+    fn alternate_flag(&mut self) -> bool {
+        let current_flag = self.alternating_flag;
+        self.alternating_flag = !self.alternating_flag;
+        current_flag
     }
 
     pub fn process(&mut self, input_samples: &[f64]) -> Option<Vec<f64>> {
