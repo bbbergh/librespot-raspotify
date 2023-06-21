@@ -618,7 +618,8 @@ enum Resampler {
 #[derive(Default)]
 pub struct StereoInterleavedResampler {
     resampler: Resampler,
-    alternating_flag: bool,
+    latency_flag: bool,
+    process_flag: bool,
 }
 
 impl StereoInterleavedResampler {
@@ -667,12 +668,13 @@ impl StereoInterleavedResampler {
 
         Self {
             resampler,
-            alternating_flag: true,
+            latency_flag: true,
+            process_flag: false,
         }
     }
 
     pub fn get_latency_pcm(&mut self) -> u64 {
-        let alternate_flag = self.alternate_flag();
+        let alternate_latency_flag = self.alternate_latency_flag();
 
         match &mut self.resampler {
             Resampler::Bypass => 0,
@@ -680,10 +682,7 @@ impl StereoInterleavedResampler {
                 left_resampler,
                 right_resampler,
             } => {
-                // We only actually need the latency
-                // from one channel for PCM frame latency
-                // to balance the load we alternate.
-                if alternate_flag {
+                if alternate_latency_flag {
                     left_resampler.get_latency_pcm()
                 } else {
                     right_resampler.get_latency_pcm()
@@ -692,13 +691,27 @@ impl StereoInterleavedResampler {
         }
     }
 
-    fn alternate_flag(&mut self) -> bool {
-        let current_flag = self.alternating_flag;
-        self.alternating_flag = !self.alternating_flag;
+    fn alternate_latency_flag(&mut self) -> bool {
+        // We only actually need the latency
+        // from one channel for PCM frame latency
+        // to balance the load we alternate.
+        let current_flag = self.latency_flag;
+        self.latency_flag = !self.latency_flag;
+        current_flag
+    }
+
+    fn alternate_process_flag(&mut self) -> bool {
+        // This along with the latency_flag makes
+        // sure that all worker calls alternate
+        // for load balancing.
+        let current_flag = self.process_flag;
+        self.process_flag = !self.process_flag;
         current_flag
     }
 
     pub fn process(&mut self, input_samples: &[f64]) -> Option<Vec<f64>> {
+        let alternate_process_flag = self.alternate_process_flag();
+
         match &mut self.resampler {
             // Bypass is basically a no-op.
             Resampler::Bypass => Some(input_samples.to_vec()),
@@ -706,20 +719,28 @@ impl StereoInterleavedResampler {
                 left_resampler,
                 right_resampler,
             } => {
-                // Split the stereo interleaved samples into left and right channels.
                 let (left_samples, right_samples) = Self::deinterleave_samples(input_samples);
 
-                // Send the resample tasks to the workers.
-                left_resampler.process(left_samples);
-                right_resampler.process(right_samples);
+                let (processed_left_samples, processed_right_samples) = if alternate_process_flag {
+                    left_resampler.process(left_samples);
+                    right_resampler.process(right_samples);
 
-                // Wait for the results.
-                let left_samples = left_resampler.receive_result();
-                let right_samples = right_resampler.receive_result();
+                    let processed_left_samples = left_resampler.receive_result();
+                    let processed_right_samples = right_resampler.receive_result();
 
-                // Re-interleave the resampled channels.
-                left_samples.and_then(|left_samples| {
-                    right_samples.map(|right_samples| {
+                    (processed_left_samples, processed_right_samples)
+                } else {
+                    right_resampler.process(right_samples);
+                    left_resampler.process(left_samples);
+
+                    let processed_right_samples = right_resampler.receive_result();
+                    let processed_left_samples = left_resampler.receive_result();
+
+                    (processed_left_samples, processed_right_samples)
+                };
+
+                processed_left_samples.and_then(|left_samples| {
+                    processed_right_samples.map(|right_samples| {
                         Self::interleave_samples(&left_samples, &right_samples)
                     })
                 })
