@@ -983,14 +983,16 @@ impl Future for PlayerInternal {
                                             *stream_position_pcm +=
                                                 (samples.len() / NUM_CHANNELS as usize) as u64;
 
-                                            let stream_position_millis = Self::position_pcm_to_ms(
-                                                stream_position_pcm
-                                                    .saturating_sub(sample_pipeline_latency_pcm),
+                                            let latency_adjusted_position_pcm = stream_position_pcm
+                                                .saturating_sub(sample_pipeline_latency_pcm);
+
+                                            let position_ms = Self::get_relative_position_ms(
+                                                latency_adjusted_position_pcm,
+                                                duration_ms,
                                             );
 
-                                            let track_position = Duration::from_millis(
-                                                stream_position_millis as u64,
-                                            );
+                                            let track_position =
+                                                Duration::from_millis(position_ms as u64);
 
                                             let notify_about_position =
                                                 match *reported_nominal_start_time {
@@ -1007,6 +1009,7 @@ impl Future for PlayerInternal {
                                                             >= 1
                                                     }
                                                 };
+
                                             if notify_about_position {
                                                 *reported_nominal_start_time =
                                                     Instant::now().checked_sub(track_position);
@@ -1014,7 +1017,7 @@ impl Future for PlayerInternal {
                                                 self.send_event(PlayerEvent::Playing {
                                                     track_id,
                                                     play_request_id,
-                                                    position_ms: stream_position_millis,
+                                                    position_ms,
                                                     duration_ms,
                                                 });
                                             }
@@ -1069,7 +1072,8 @@ impl Future for PlayerInternal {
             } = self.state
             {
                 if (!*suggested_to_preload_next_track)
-                    && ((duration_ms as i64 - Self::position_pcm_to_ms(stream_position_pcm) as i64)
+                    && ((duration_ms as i64
+                        - Self::get_relative_position_ms(stream_position_pcm, duration_ms) as i64)
                         < PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS as i64)
                     && stream_loader_controller.range_to_end_available()
                 {
@@ -1093,19 +1097,21 @@ impl Future for PlayerInternal {
 }
 
 impl PlayerInternal {
-    fn position_pcm_to_ms(position_pcm: u64) -> u32 {
-        (position_pcm as f64 * MS_PER_PAGE) as u32
-    }
-
     fn position_ms_to_pcm(position_ms: u32) -> u64 {
         (position_ms as f64 * PAGES_PER_MS) as u64
     }
 
     fn get_relative_position_pcm(position_ms: u32, duration_ms: u32) -> u64 {
         let position_pcm = (position_ms as f64 * PAGES_PER_MS).round() as u64;
-        let duration_ms_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
+        let duration_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
 
-        position_pcm.min(duration_ms_pcm)
+        position_pcm.min(duration_pcm)
+    }
+
+    fn get_relative_position_ms(position_pcm: u64, duration_ms: u32) -> u32 {
+        let position_ms = (position_pcm as f64 * MS_PER_PAGE).round() as u32;
+
+        position_ms.min(duration_ms)
     }
 
     fn ensure_sink_running(&mut self) {
@@ -1205,7 +1211,7 @@ impl PlayerInternal {
         {
             self.state.paused_to_playing();
 
-            let position_ms = Self::position_pcm_to_ms(stream_position_pcm);
+            let position_ms = Self::get_relative_position_ms(stream_position_pcm, duration_ms);
             self.send_event(PlayerEvent::Playing {
                 track_id,
                 play_request_id,
@@ -1231,7 +1237,8 @@ impl PlayerInternal {
             self.state.playing_to_paused();
 
             self.ensure_sink_stopped(false);
-            let position_ms = Self::position_pcm_to_ms(stream_position_pcm);
+
+            let position_ms = Self::get_relative_position_ms(stream_position_pcm, duration_ms);
             self.send_event(PlayerEvent::Paused {
                 track_id,
                 play_request_id,
@@ -1282,7 +1289,10 @@ impl PlayerInternal {
         loaded_track: PlayerLoadedTrackData,
         start_playback: bool,
     ) {
-        let position_ms = Self::position_pcm_to_ms(loaded_track.stream_position_pcm);
+        let position_ms = Self::get_relative_position_ms(
+            loaded_track.stream_position_pcm,
+            loaded_track.duration_ms,
+        );
 
         self.sample_pipeline.set_normalisation_factor(
             self.auto_normalise_as_album,
