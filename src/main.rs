@@ -1532,7 +1532,9 @@ fn get_setup() -> Setup {
                         exit(1);
                     }
                 })
-                .unwrap_or(player_default_config.normalisation_attack_cf);
+                .unwrap_or(
+                    sample_rate.duration_to_normalisation_coefficient(Duration::from_millis(5)),
+                );
 
             normalisation_release_cf = opt_str(NORMALISATION_RELEASE)
                 .map(|release| match release.parse::<u64>() {
@@ -1563,7 +1565,9 @@ fn get_setup() -> Setup {
                         exit(1);
                     }
                 })
-                .unwrap_or(player_default_config.normalisation_release_cf);
+                .unwrap_or(
+                    sample_rate.duration_to_normalisation_coefficient(Duration::from_millis(100)),
+                );
 
             normalisation_knee_db = opt_str(NORMALISATION_KNEE)
                 .map(|knee| match knee.parse::<f64>() {

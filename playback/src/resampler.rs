@@ -203,7 +203,7 @@ impl SampleRate {
     }
 
     pub fn normalisation_coefficient_to_duration(&self, coefficient: f64) -> std::time::Duration {
-        std::time::Duration::from_secs_f64(-1.0 / f64::ln(coefficient) / self.samples_per_second())
+        std::time::Duration::from_secs_f64(-1.0 / coefficient.ln() / self.samples_per_second())
     }
 
     fn samples_per_second(&self) -> f64 {

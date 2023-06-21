@@ -26,11 +26,8 @@ use crate::core::util::SeqGenerator;
 use crate::decoder::{AudioDecoder, AudioPacket, DecoderError, PassthroughDecoder, VorbisDecoder};
 use crate::metadata::{AudioItem, FileFormat};
 use crate::mixer::VolumeGetter;
+use crate::player_time::PlayerTime;
 use crate::sample_pipeline::SamplePipeline;
-
-use crate::{MS_PER_PAGE, NUM_CHANNELS, PAGES_PER_MS};
-
-const PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS: u32 = 30000;
 
 pub struct Player {
     commands: Option<mpsc::UnboundedSender<PlayerCommand>>,
@@ -837,7 +834,7 @@ impl PlayerTrackLoader {
                 }
             };
 
-            let position_pcm = PlayerInternal::get_relative_position_pcm(position_ms, duration_ms);
+            let position_pcm = PlayerTime::get_relative_position_pcm(position_ms, duration_ms);
 
             if position_pcm != 0 {
                 if let Err(e) = decoder.seek(position_pcm) {
@@ -981,38 +978,17 @@ impl Future for PlayerInternal {
                                     match packet.samples() {
                                         Ok(samples) => {
                                             *stream_position_pcm +=
-                                                (samples.len() / NUM_CHANNELS as usize) as u64;
+                                                PlayerTime::samples_to_pcm(samples);
 
-                                            let latency_adjusted_position_pcm = stream_position_pcm
-                                                .saturating_sub(sample_pipeline_latency_pcm);
-
-                                            let position_ms = Self::get_relative_position_ms(
-                                                latency_adjusted_position_pcm,
-                                                duration_ms,
-                                            );
-
-                                            let track_position =
-                                                Duration::from_millis(position_ms as u64);
-
-                                            let notify_about_position =
-                                                match *reported_nominal_start_time {
-                                                    None => true,
-                                                    Some(reported_nominal_start_time) => {
-                                                        // Only notify if we're behind,
-                                                        // more than likely due to sample pipeline latency.
-                                                        Instant::now()
-                                                            .duration_since(
-                                                                reported_nominal_start_time,
-                                                            )
-                                                            .saturating_sub(track_position)
-                                                            .as_secs()
-                                                            >= 1
-                                                    }
-                                                };
-
-                                            if notify_about_position {
-                                                *reported_nominal_start_time =
-                                                    Instant::now().checked_sub(track_position);
+                                            if let Some((new_start_time, position_ms)) =
+                                                PlayerTime::should_notify(
+                                                    *stream_position_pcm,
+                                                    sample_pipeline_latency_pcm,
+                                                    duration_ms,
+                                                    *reported_nominal_start_time,
+                                                )
+                                            {
+                                                *reported_nominal_start_time = new_start_time;
 
                                                 self.send_event(PlayerEvent::Playing {
                                                     track_id,
@@ -1072,9 +1048,7 @@ impl Future for PlayerInternal {
             } = self.state
             {
                 if (!*suggested_to_preload_next_track)
-                    && ((duration_ms as i64
-                        - Self::get_relative_position_ms(stream_position_pcm, duration_ms) as i64)
-                        < PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS as i64)
+                    && PlayerTime::should_preload(stream_position_pcm, duration_ms)
                     && stream_loader_controller.range_to_end_available()
                 {
                     *suggested_to_preload_next_track = true;
@@ -1097,23 +1071,6 @@ impl Future for PlayerInternal {
 }
 
 impl PlayerInternal {
-    fn position_ms_to_pcm(position_ms: u32) -> u64 {
-        (position_ms as f64 * PAGES_PER_MS) as u64
-    }
-
-    fn get_relative_position_pcm(position_ms: u32, duration_ms: u32) -> u64 {
-        let position_pcm = (position_ms as f64 * PAGES_PER_MS).round() as u64;
-        let duration_pcm = (duration_ms as f64 * PAGES_PER_MS) as u64;
-
-        position_pcm.min(duration_pcm)
-    }
-
-    fn get_relative_position_ms(position_pcm: u64, duration_ms: u32) -> u32 {
-        let position_ms = (position_pcm as f64 * MS_PER_PAGE).round() as u32;
-
-        position_ms.min(duration_ms)
-    }
-
     fn ensure_sink_running(&mut self) {
         if self.sink_status != SinkStatus::Running {
             trace!("== Starting sink ==");
@@ -1211,7 +1168,8 @@ impl PlayerInternal {
         {
             self.state.paused_to_playing();
 
-            let position_ms = Self::get_relative_position_ms(stream_position_pcm, duration_ms);
+            let position_ms =
+                PlayerTime::get_relative_position_ms(stream_position_pcm, duration_ms);
             self.send_event(PlayerEvent::Playing {
                 track_id,
                 play_request_id,
@@ -1238,7 +1196,8 @@ impl PlayerInternal {
 
             self.ensure_sink_stopped(false);
 
-            let position_ms = Self::get_relative_position_ms(stream_position_pcm, duration_ms);
+            let position_ms =
+                PlayerTime::get_relative_position_ms(stream_position_pcm, duration_ms);
             self.send_event(PlayerEvent::Paused {
                 track_id,
                 play_request_id,
@@ -1289,7 +1248,7 @@ impl PlayerInternal {
         loaded_track: PlayerLoadedTrackData,
         start_playback: bool,
     ) {
-        let position_ms = Self::get_relative_position_ms(
+        let position_ms = PlayerTime::get_relative_position_ms(
             loaded_track.stream_position_pcm,
             loaded_track.duration_ms,
         );
@@ -1409,10 +1368,8 @@ impl PlayerInternal {
                     }
                 };
 
-                let position_pcm = match state_duration {
-                    Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
-                    None => Self::position_ms_to_pcm(position_ms),
-                };
+                let position_pcm =
+                    PlayerTime::get_maybe_relative_position_pcm(position_ms, state_duration);
 
                 if position_pcm != loaded_track.stream_position_pcm {
                     loaded_track
@@ -1453,10 +1410,8 @@ impl PlayerInternal {
         {
             if current_track_id == track_id {
                 // we can use the current decoder. Ensure it's at the correct position.
-                let position_pcm = match state_duration {
-                    Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
-                    None => Self::position_ms_to_pcm(position_ms),
-                };
+                let position_pcm =
+                    PlayerTime::get_maybe_relative_position_pcm(position_ms, state_duration);
 
                 if position_pcm != *stream_position_pcm {
                     stream_loader_controller.set_random_access_mode();
@@ -1529,8 +1484,10 @@ impl PlayerInternal {
                     mut loaded_track,
                 } = preload
                 {
-                    let position_pcm =
-                        Self::get_relative_position_pcm(position_ms, loaded_track.duration_ms);
+                    let position_pcm = PlayerTime::get_relative_position_pcm(
+                        position_ms,
+                        loaded_track.duration_ms,
+                    );
 
                     if position_pcm != loaded_track.stream_position_pcm {
                         loaded_track
@@ -1654,10 +1611,8 @@ impl PlayerInternal {
             stream_loader_controller.set_random_access_mode();
         }
         if let Some(decoder) = self.state.decoder() {
-            let position_pcm = match state_duration {
-                Some(duration_ms) => Self::get_relative_position_pcm(position_ms, duration_ms),
-                None => Self::position_ms_to_pcm(position_ms),
-            };
+            let position_pcm =
+                PlayerTime::get_maybe_relative_position_pcm(position_ms, state_duration);
 
             match decoder.seek(position_pcm) {
                 Ok(_) => {

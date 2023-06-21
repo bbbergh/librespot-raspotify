@@ -13,6 +13,7 @@ pub mod dither;
 pub mod mixer;
 pub mod normaliser;
 pub mod player;
+pub mod player_time;
 pub mod resampler;
 pub mod sample_pipeline;
 

@@ -139,8 +139,11 @@ impl Default for PlayerConfig {
             normalisation_method: NormalisationMethod::default(),
             normalisation_pregain_db: 0.0,
             normalisation_threshold_dbfs: -2.0,
+            // Dummy value. We can't use the default because
+            // no matter what it's dependent on the sample rate.
             normalisation_attack_cf: SampleRate::default()
                 .duration_to_normalisation_coefficient(Duration::from_millis(5)),
+            // Same with release.
             normalisation_release_cf: SampleRate::default()
                 .duration_to_normalisation_coefficient(Duration::from_millis(100)),
             normalisation_knee_db: 5.0,
