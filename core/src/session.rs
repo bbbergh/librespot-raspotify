@@ -77,6 +77,7 @@ struct SessionData {
     client_brand_name: String,
     client_model_name: String,
     connection_id: String,
+    auth_blob: Vec<u8>,
     time_delta: i64,
     invalid: bool,
     user_data: UserData,
@@ -174,6 +175,7 @@ impl Session {
 
         info!("Authenticated as \"{}\" !", reusable_credentials.username);
         self.set_username(&reusable_credentials.username);
+        self.set_auth_blob(&reusable_credentials.auth_data);
         if let Some(cache) = self.cache() {
             if store_credentials {
                 cache.save_credentials(&reusable_credentials);
@@ -252,7 +254,6 @@ impl Session {
             if session.is_invalid() {
                 break;
             }
-
             // It would be so much easier to use elapsed but elapsed could
             // potentially panic is rare cases.
             // See:
@@ -475,6 +476,14 @@ impl Session {
 
     pub fn set_username(&self, username: &str) {
         self.0.data.write().user_data.canonical_username = username.to_owned();
+    }
+
+    pub fn auth_blob(&self) -> Vec<u8> {
+        self.0.data.read().auth_blob.clone()
+    }
+
+    pub fn set_auth_blob(&self, auth_blob: &[u8]) {
+        self.0.data.write().auth_blob = auth_blob.to_owned();
     }
 
     pub fn country(&self) -> String {
