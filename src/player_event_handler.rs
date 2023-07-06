@@ -42,6 +42,74 @@ impl EventHandler {
                     let mut env_vars = HashMap::new();
 
                     match event {
+                        PlayerEvent::Preloading { audio_item } => {
+                            match audio_item.track_id.to_base62() {
+                                Err(e) => {
+                                    warn!("PlayerEvent::Preloading: Invalid track id: {}", e)
+                                }
+                                Ok(id) => {
+                                    env_vars.insert("PLAYER_EVENT", "preloading".to_string());
+                                    env_vars.insert("TRACK_ID", id);
+                                    env_vars.insert("URI", audio_item.uri);
+                                    env_vars.insert("NAME", audio_item.name);
+                                    env_vars.insert(
+                                        "COVERS",
+                                        audio_item
+                                            .covers
+                                            .into_iter()
+                                            .map(|c| c.url)
+                                            .collect::<Vec<String>>()
+                                            .join("\n"),
+                                    );
+                                    env_vars.insert("LANGUAGE", audio_item.language.join("\n"));
+                                    env_vars
+                                        .insert("DURATION_MS", audio_item.duration_ms.to_string());
+                                    env_vars
+                                        .insert("IS_EXPLICIT", audio_item.is_explicit.to_string());
+
+                                    match audio_item.unique_fields {
+                                        UniqueFields::Track {
+                                            artists,
+                                            album,
+                                            album_artists,
+                                            popularity,
+                                            number,
+                                            disc_number,
+                                        } => {
+                                            env_vars.insert("ITEM_TYPE", "Track".to_string());
+                                            env_vars.insert(
+                                                "ARTISTS",
+                                                artists
+                                                    .0
+                                                    .into_iter()
+                                                    .map(|a| a.name)
+                                                    .collect::<Vec<String>>()
+                                                    .join("\n"),
+                                            );
+                                            env_vars
+                                                .insert("ALBUM_ARTISTS", album_artists.join("\n"));
+                                            env_vars.insert("ALBUM", album);
+                                            env_vars.insert("POPULARITY", popularity.to_string());
+                                            env_vars.insert("NUMBER", number.to_string());
+                                            env_vars.insert("DISC_NUMBER", disc_number.to_string());
+                                        }
+                                        UniqueFields::Episode {
+                                            description,
+                                            publish_time,
+                                            show_name,
+                                        } => {
+                                            env_vars.insert("ITEM_TYPE", "Episode".to_string());
+                                            env_vars.insert("DESCRIPTION", description);
+                                            env_vars.insert(
+                                                "PUBLISH_TIME",
+                                                publish_time.unix_timestamp().to_string(),
+                                            );
+                                            env_vars.insert("SHOW_NAME", show_name);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         PlayerEvent::TrackChanged { audio_item } => {
                             match audio_item.track_id.to_base62() {
                                 Err(e) => {
@@ -145,13 +213,6 @@ impl EventHandler {
                             Err(e) => warn!("PlayerEvent::Loading: Invalid track id: {}", e),
                             Ok(id) => {
                                 env_vars.insert("PLAYER_EVENT", "loading".to_string());
-                                env_vars.insert("TRACK_ID", id);
-                            }
-                        },
-                        PlayerEvent::Preloading { track_id, .. } => match track_id.to_base62() {
-                            Err(e) => warn!("PlayerEvent::Preloading: Invalid track id: {}", e),
-                            Ok(id) => {
-                                env_vars.insert("PLAYER_EVENT", "preloading".to_string());
                                 env_vars.insert("TRACK_ID", id);
                             }
                         },

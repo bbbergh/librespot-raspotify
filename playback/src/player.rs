@@ -136,7 +136,7 @@ pub enum PlayerEvent {
     },
     // The player is preloading a track.
     Preloading {
-        track_id: SpotifyId,
+        audio_item: Box<AudioItem>,
     },
     // The player is playing a track.
     // This event is issued at the start of playback of whenever the position must be communicated
@@ -1108,7 +1108,9 @@ impl Future for PlayerInternal {
             {
                 match loader.as_mut().poll(cx) {
                     Poll::Ready(Ok(loaded_track)) => {
-                        self.send_event(PlayerEvent::Preloading { track_id });
+                        let audio_item = Box::new(loaded_track.audio_item.clone());
+
+                        self.send_event(PlayerEvent::Preloading { audio_item });
                         self.preload = PlayerPreload::Ready {
                             track_id,
                             loaded_track: Box::new(loaded_track),

@@ -1,76 +1,52 @@
 use std::{
-    collections::{vec_deque, VecDeque},
-    process::exit,
-    sync::atomic::Ordering,
-    sync::mpsc,
-    thread,
+    cmp::Ordering, collections::VecDeque, process::exit, sync::atomic::Ordering::SeqCst,
+    sync::mpsc, thread,
 };
 
-use crate::{
-    config::SampleRate, player::PLAYER_COUNTER, RESAMPLER_INPUT_SIZE,
-    SAMPLE_RATE as SOURCE_SAMPLE_RATE,
-};
-
-struct DelayLine {
-    buffer: VecDeque<f64>,
-    coefficients_length: usize,
-}
-
-impl DelayLine {
-    fn new(coefficients_length: usize) -> DelayLine {
-        Self {
-            buffer: VecDeque::with_capacity(coefficients_length),
-            coefficients_length,
-        }
-    }
-
-    fn push(&mut self, sample: f64) {
-        self.buffer.push_back(sample);
-
-        while self.buffer.len() > self.coefficients_length {
-            self.buffer.pop_front();
-        }
-    }
-
-    fn clear(&mut self) {
-        self.buffer.clear();
-    }
-}
-
-impl<'a> IntoIterator for &'a DelayLine {
-    type Item = &'a f64;
-    type IntoIter = vec_deque::Iter<'a, f64>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.buffer.iter()
-    }
-}
+use crate::{config::SampleRate, player::PLAYER_COUNTER, RESAMPLER_INPUT_SIZE};
 
 struct ConvolutionFilter {
     coefficients: Vec<f64>,
-    delay_line: DelayLine,
+    coefficients_length: usize,
+    delay_line: VecDeque<f64>,
 }
 
 impl ConvolutionFilter {
     fn new(coefficients: Vec<f64>) -> Self {
-        let delay_line = DelayLine::new(coefficients.len());
+        let coefficients_length = coefficients.len();
+        let delay_line = VecDeque::with_capacity(coefficients_length + 1);
 
         Self {
             coefficients,
+            coefficients_length,
             delay_line,
         }
     }
 
     fn convolute(&mut self, sample: f64) -> f64 {
-        self.delay_line.push(sample);
+        self.delay_line.push_back(sample);
 
-        // Temporal convolution
-        self.coefficients
-            .iter()
-            .zip(&self.delay_line)
-            .fold(0.0, |acc, (coefficient, delay_line_sample)| {
-                acc + coefficient * delay_line_sample
-            })
+        loop {
+            match self.delay_line.len().cmp(&self.coefficients_length) {
+                // Convolution can not be preformed yet, the delay line is not full.
+                // Return silence until it can.
+                Ordering::Less => break 0.0,
+                Ordering::Greater => {
+                    // Remove old samples from the delay line.
+                    self.delay_line.pop_front();
+                }
+                Ordering::Equal => {
+                    // The delay line is full, preform temporal interpolation
+                    // and return the result.
+                    break self.coefficients.iter().zip(&self.delay_line).fold(
+                        0.0,
+                        |acc, (coefficient, delay_line_sample)| {
+                            acc + coefficient * delay_line_sample
+                        },
+                    );
+                }
+            }
+        }
     }
 
     fn clear(&mut self) {
@@ -104,7 +80,7 @@ impl MonoSincResampler {
 
         Self {
             interpolator: ConvolutionFilter::new(coefficients),
-            input_buffer: Vec::with_capacity(SOURCE_SAMPLE_RATE as usize),
+            input_buffer: Vec::with_capacity(RESAMPLER_INPUT_SIZE),
             resample_factor_reciprocal,
             delay_line_latency,
             interpolation_output_size,
@@ -120,35 +96,37 @@ impl MonoSincResampler {
         self.input_buffer.clear();
     }
 
-    fn resample(&mut self, samples: &[f64]) -> Option<Vec<f64>> {
+    fn resample(&mut self, samples: &[f64]) -> (Option<Vec<f64>>, u64) {
         self.input_buffer.extend_from_slice(samples);
 
         let num_buffer_chunks = self.input_buffer.len().saturating_div(RESAMPLER_INPUT_SIZE);
 
         if num_buffer_chunks == 0 {
-            return None;
+            return (None, self.get_latency_pcm());
         }
 
         let input_size = num_buffer_chunks * RESAMPLER_INPUT_SIZE;
-        // The size of the output after interpolation.
+
         let output_size = num_buffer_chunks * self.interpolation_output_size;
 
         let mut output = Vec::with_capacity(output_size);
 
         output.extend((0..output_size).map(|ouput_index| {
-            // The factional weights are already calculated and factored
-            // into our interpolation coefficients so all we have to
-            // do is pretend we're doing nearest-neighbor interpolation
-            // and push samples though the Interpolator and what comes
-            // out the other side is Sinc Windowed Interpolated samples.
-            let sample_index = (ouput_index as f64 * self.resample_factor_reciprocal) as usize;
-            let sample = self.input_buffer[sample_index];
-            self.interpolator.convolute(sample)
+            // Since the interpolation coefficients are pre-calculated we can pretend like
+            // we're doing nearest neighbor interpolation and then push the samples though
+            // the interpolator as if it were a simple FIR filter (which it actually also is).
+            // What comes out the other side is anti-aliased windowed sinc interpolated samples.
+            self.interpolator.convolute(
+                *self
+                    .input_buffer
+                    .get((ouput_index as f64 * self.resample_factor_reciprocal) as usize)
+                    .unwrap_or(&0.0),
+            )
         }));
 
         self.input_buffer.drain(..input_size);
 
-        Some(output)
+        (Some(output), self.get_latency_pcm())
     }
 }
 
@@ -165,11 +143,13 @@ struct ResampleWorker {
 }
 
 impl ResampleWorker {
-    fn new(mut resampler: MonoSincResampler, name: String) -> Self {
+    fn new(sample_rate: SampleRate, name: String) -> Self {
         let (task_sender, task_receiver) = mpsc::channel();
         let (result_sender, result_receiver) = mpsc::channel();
 
         let builder = thread::Builder::new().name(name.clone());
+
+        let mut resampler = MonoSincResampler::new(sample_rate);
 
         let handle = match builder.spawn(move || loop {
             match task_receiver.recv() {
@@ -184,10 +164,7 @@ impl ResampleWorker {
                 Ok(task) => match task {
                     ResampleTask::Stop => resampler.stop(),
                     ResampleTask::Resample(samples) => {
-                        let resampled = resampler.resample(&samples);
-                        let latency = resampler.get_latency_pcm();
-
-                        result_sender.send((resampled, latency)).ok();
+                        result_sender.send(resampler.resample(&samples)).ok();
                     }
                     ResampleTask::Terminate => {
                         loop {
@@ -294,16 +271,16 @@ impl StereoInterleavedResampler {
                 debug!("Interpolation Type: Windowed Sinc");
 
                 // The player increments the player id when it gets it...
-                let player_id = PLAYER_COUNTER.load(Ordering::SeqCst).saturating_sub(1);
+                let player_id = PLAYER_COUNTER.load(SeqCst).saturating_sub(1);
 
                 Resampler::Worker {
                     left_resampler: ResampleWorker::new(
-                        MonoSincResampler::new(sample_rate),
-                        format!("resampler:{player_id}:left"),
+                        sample_rate,
+                        format!("resampler:L:{player_id}"),
                     ),
                     right_resampler: ResampleWorker::new(
-                        MonoSincResampler::new(sample_rate),
-                        format!("resampler:{player_id}:right"),
+                        sample_rate,
+                        format!("resampler:R:{player_id}"),
                     ),
                 }
             }
