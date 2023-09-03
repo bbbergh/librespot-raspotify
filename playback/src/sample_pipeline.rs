@@ -14,6 +14,7 @@ pub struct SamplePipeline {
     resampler: StereoInterleavedResampler,
     normaliser: Normaliser,
     converter: Converter,
+    is_passthough: bool,
     sink: Box<dyn Sink>,
 }
 
@@ -32,6 +33,7 @@ impl SamplePipeline {
             resampler,
             normaliser,
             converter,
+            is_passthough: false,
             sink,
         }
     }
@@ -49,6 +51,14 @@ impl SamplePipeline {
     }
 
     pub fn stop(&mut self) -> SinkResult<()> {
+        if !self.is_passthough {
+            self.resampler
+                .drain()
+                .map(|processed_samples| self.normaliser.normalise(processed_samples))
+                .map(|new_packet| self.sink.write(new_packet, &mut self.converter))
+                .transpose()?;
+        }
+
         self.resampler.stop();
         self.normaliser.stop();
         self.sink.stop()?;
@@ -73,6 +83,7 @@ impl SamplePipeline {
                 .map(|new_packet| self.sink.write(new_packet, &mut self.converter))
                 .transpose()?;
         } else {
+            self.is_passthough = true;
             self.sink.write(packet, &mut self.converter)?;
         }
 
